@@ -1,0 +1,67 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.7'
+          cache: false
+
+      - name: Tag matches the version in the code
+        run: |
+          ver="$(grep -m1 '^const Version' cmd/monad-failover/main.go | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?')"
+          echo "code: v$ver  tag: $GITHUB_REF_NAME"
+          test "v$ver" = "$GITHUB_REF_NAME"
+
+      - name: Reproducible release build (linux/amd64)
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o monad-failover ./cmd/monad-failover
+
+      # The README is the checksum the operator verifies against. A tag whose
+      # README does not match its own build is not published.
+      - name: Build matches the README checksum
+        run: |
+          want="$(grep -oE '\b[0-9a-f]{64}\b' README.md | head -1)"
+          got="$(sha256sum monad-failover | awk '{print $1}')"
+          echo "README: $want"
+          echo "build:  $got"
+          test "$want" = "$got"
+          sha256sum monad-failover > checksums.txt
+          cat checksums.txt
+
+      - name: Release notes from CHANGELOG
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          awk -v ver="$ver" '
+            /^## / { on = index($0, "## " ver " ") == 1 || $0 == "## " ver; if (on) next }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then echo "See CHANGELOG.md." > notes.md; fi
+          cat notes.md
+
+      # Works for a tag pushed with git and for a release drafted in the
+      # GitHub UI (which creates the tag first): the release is created if
+      # missing, otherwise its assets are replaced.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pre=""
+          case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" monad-failover checksums.txt --clobber
+            gh release edit "$GITHUB_REF_NAME" --notes-file notes.md $pre
+          else
+            gh release create "$GITHUB_REF_NAME" monad-failover checksums.txt \
+              --title "$GITHUB_REF_NAME" --notes-file notes.md $pre
+          fi
