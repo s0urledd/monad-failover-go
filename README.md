@@ -60,8 +60,7 @@ echo "4572daf38b6fd39d137e5869b93cafc447b6d2214c91576ba4c84c0d9c613fdb  monad-fa
 install -m 755 monad-failover /usr/local/bin/monad-failover
 ```
 
-To build it yourself instead, with Go 1.24.7. The build is reproducible, so
-the binary and checksum come out identical:
+To build from source, install Go 1.24.7 or later and run:
 
 ```bash
 git clone https://github.com/s0urledd/monad-failover-go && cd monad-failover-go && git checkout v0.2.2
