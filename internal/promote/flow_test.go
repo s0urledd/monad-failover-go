@@ -270,7 +270,7 @@ func TestFullPromotionEndToEnd(t *testing.T) {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
 	expect(t, out, "VALIDATOR PROMOTION COMPLETE")
-	reject(t, out, "Resuming from step", "do these match", "keep this beneficiary", "proceed with cutover")
+	reject(t, out, "Resuming from step", "do these match", "keep this beneficiary", "? proceed with cutover?", "type STOPPED")
 	expect(t, out,
 		"Node: in-sync (block difference: 0)",
 		"Network: testnet",
