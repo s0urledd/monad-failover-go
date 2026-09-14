@@ -37,9 +37,10 @@ before 1.0.
   set in `/home/monad/.env`.
 - Your validator's `secp-backup` and `bls-backup`: the text backups containing
   the secret IKM, not the encrypted `id-secp` / `id-bls` keystores.
-  Place them in a private directory of your choice on the target
-  (directory `700`, files `600`). These are unencrypted secrets; keep off-server
-  copies. Hidden manual IKM entry is also available.
+  Place them in a private directory of their own on the target (directory
+  `700`, files `600`); `/opt/monad/backup` holds this node's own backups.
+  These are unencrypted secrets; keep off-server copies. Hidden manual IKM
+  entry is also available.
 - The validator's SECP and BLS public keys to compare against the plan.
 - Its beneficiary address and `node_name`, from your saved validator config.
   A blank beneficiary keeps the target's existing address; the plan shows it as kept.
@@ -50,8 +51,8 @@ exceeds the suggestion. Without a usable record, enter the number yourself.
 
 ## Install
 
-Prebuilt binary (linux/amd64), verified against the checksum in this README.
-Run as root on the target full node:
+On the target full node, as root. The checksum is verified before the
+binary is installed:
 
 ```bash
 curl -fsSLO https://github.com/s0urledd/monad-failover-go/releases/download/v0.2.0/monad-failover &&
@@ -59,55 +60,41 @@ echo "7c555a5703691f4fce387122a5b06b306364f93672f56cdca557d1f7896fb427  monad-fa
 install -m 755 monad-failover /usr/local/bin/monad-failover
 ```
 
-From source, with Go 1.24.7. The build is reproducible and gives the identical
-binary and checksum:
+To build it yourself instead, with Go 1.24.7. The build is reproducible, so
+the binary and checksum come out identical:
 
 ```bash
-git clone https://github.com/s0urledd/monad-failover-go && cd monad-failover-go
-git checkout v0.2.0
+git clone https://github.com/s0urledd/monad-failover-go && cd monad-failover-go && git checkout v0.2.0
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o monad-failover ./cmd/monad-failover
-sha256sum monad-failover
 install -m 755 monad-failover /usr/local/bin/monad-failover
 ```
 
-Or, with Go installed, `go install github.com/s0urledd/monad-failover-go/cmd/monad-failover@v0.2.0`;
-the Go checksum database verifies the source and the binary lands in
-`$(go env GOPATH)/bin`.
-
-The checksum is verified before installation. If the download or verification
-fails, your existing installation stays unchanged. CI builds the release the
-same way and fails any change where the README checksum and the build drift
-apart. The binary is static and needs no runtime; the commands it calls are
-`systemctl`, `monad-keystore`, `monad-sign-name-record` and, for sync checks,
-`monad-status`.
+The binary is static. It calls `systemctl`, `monad-keystore`,
+`monad-sign-name-record` and, for sync checks, `monad-status`.
 
 ## Run
 
-Replace `/path/to/validator-backups` with your backup directory in both commands:
+Point it at the directory holding your validator's `secp-backup` and `bls-backup`:
 
 ```bash
-monad-failover --dry-run --backup-dir "/path/to/validator-backups"
-monad-failover --backup-dir "/path/to/validator-backups"
+monad-failover --dry-run --backup-dir /path/to/validator-backups   # checks only, changes nothing
+monad-failover --backup-dir /path/to/validator-backups             # the migration
 ```
 
-Dry-run checks prerequisites and backup format; it does not verify validator
-identity or perform signing. Without `--backup-dir`, the live run asks where
-the keys are. Its default `/opt/monad/backup` may contain the full node's own backups.
-
-Every input can be given as a flag; whatever is missing is asked for. Flags
-never skip the plan or the `STOPPED` gate:
+The run asks for the beneficiary, node name and sequence number, shows the
+plan, and changes nothing until you confirm it and type `STOPPED`. The same
+values can be given as flags:
 
 ```bash
-monad-failover --backup-dir "/path/to/validator-backups" \
-  --beneficiary 0x<40 hex> --node-name my-validator --seq 12
+monad-failover --backup-dir /path/to/validator-backups --beneficiary 0xADDRESS --node-name NAME --seq N
 ```
 
 | Flag | Effect |
 |---|---|
-| `--dry-run` | Read-only preflight |
-| `--backup-dir PATH` | Directory containing the validator's two backup files |
-| `--beneficiary ADDR` | Beneficiary address, `0x` and 40 hex characters |
-| `--node-name NAME` | `node_name` to take over from the old validator |
+| `--dry-run` | Checks only; nothing is changed |
+| `--backup-dir PATH` | Directory holding the validator's two backup files |
+| `--beneficiary 0xADDRESS` | Beneficiary address |
+| `--node-name NAME` | `node_name` taken over from the old validator |
 | `--seq N` | Name record sequence, higher than any this identity has used |
 | `--public-ip IP` | Use this IPv4 instead of automatic detection |
 | `--resume` | Continue an interrupted run |
