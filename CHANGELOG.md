@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.2 — 2026-09-14
+
+- Use one plan confirmation for both interactive and flag-based migrations.
+  The instruction to stop the old validator appears directly above it;
+  confirming starts cutover without a separate STOPPED prompt.
+- Keep the default answer as no. Interrupted input preserves the prepared
+  run for resume; rejecting a fresh plan clears its staging and state.
+- Update the README, reboot procedure and flow regression tests.
+
 ## 0.2.1 — 2026-09-14
 
 Fixes from a pre-testnet audit. The cutover sequence is unchanged.

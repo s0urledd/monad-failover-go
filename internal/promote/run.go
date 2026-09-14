@@ -26,7 +26,7 @@ const PhasesTotal = 8
 
 // Options are the command-line choices for a live run. Every input can be
 // given as a flag; whatever is missing is asked for. Flags never skip a
-// confirmation: the plan and the STOPPED gate are always asked.
+// confirmation: the plan confirmation is always asked.
 type Options struct {
 	Resume       bool
 	KeySourceDir string // --backup-dir; "" asks, "-" means manual IKM entry
@@ -590,8 +590,8 @@ func (r *Run) configure() error {
 	r.c.Println("  All changes go to a staging copy (node.toml.new).")
 	r.c.Println("  The live config is untouched until cutover.")
 
-	// Never touch the live node.toml before cutover. An abort at the plan or
-	// the STOPPED gate must leave a fully unmodified full node behind.
+	// Never touch the live node.toml before cutover. An abort at the plan
+	// must leave the full node identity unchanged.
 	if err := place.CopyPreserve(r.p.NodeToml, r.d.TomlNew); err != nil {
 		return ui.Die("Could not copy " + r.p.NodeToml + " to staging")
 	}

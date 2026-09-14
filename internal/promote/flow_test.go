@@ -168,20 +168,20 @@ func (h *harness) dryRun(keyDir string) (int, string) {
 }
 
 // normalStdin answers every prompt of a healthy run through completion:
-// beneficiary, node_name, seq_num, the plan, then STOPPED.
+// beneficiary, node_name, seq_num, then the plan confirmation.
 func normalStdin(ben, name, seq string) string {
-	return ben + "\n" + name + "\n" + seq + "\ny\nSTOPPED\n"
+	return ben + "\n" + name + "\n" + seq + "\ny\n"
 }
 
 // planStdin answers a run whose inputs all came from flags.
-const planStdin = "y\nSTOPPED\n"
+const planStdin = "y\n"
 
 // resumeStdin answers a resume that shows the plan again before cutover.
-const resumeStdin = "y\nSTOPPED\n"
+const resumeStdin = "y\n"
 
-// abortAtStopped accepts the plan and then refuses the STOPPED gate.
-func abortAtStopped(ben, name, seq string) string {
-	return ben + "\n" + name + "\n" + seq + "\ny\nnope\n"
+// interruptAtPlan ends input at the plan, retaining prepared state for resume.
+func interruptAtPlan(ben, name, seq string) string {
+	return ben + "\n" + name + "\n" + seq + "\n"
 }
 
 func (h *harness) normalOpts() Options {
@@ -294,7 +294,7 @@ func TestFullPromotionEndToEnd(t *testing.T) {
 		"seq_num      8 (entered)",
 		"beneficiary  "+beneficiary+" (entered)",
 		"node_name    "+nodeName+" (entered)",
-		"Old validator confirmed stopped or offline",
+		"Cutover confirmed",
 		"Services masked for the swap",
 		"SECP key placed", "BLS key placed", "node.toml placed",
 		"Live identity matches what was placed",
@@ -355,15 +355,15 @@ func TestFullPromotionEndToEnd(t *testing.T) {
 	}
 }
 
-func TestAbortAtStoppedLeavesLiveNodeUntouched(t *testing.T) {
+func TestInputEndsAtPlanLeavesLiveNodeUntouched(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
 	before := h.liveSHAs()
-	code, out := h.run(abortAtStopped(beneficiary, nodeName, "8"), h.normalOpts())
+	code, out := h.run(interruptAtPlan(beneficiary, nodeName, "8"), h.normalOpts())
 	if code != 1 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
-	expect(t, out, "Not confirmed — aborting before cutover.")
+	expect(t, out, "Input ended while waiting for: Confirm this plan and proceed with cutover? (y/N)")
 	if h.liveSHAs() != before {
 		t.Error("live files changed before cutover")
 	}
@@ -378,7 +378,7 @@ func TestStagedKeyChangedAfterConfirmationIsRefused(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
 	before := h.liveSHAs()
-	if code, out := h.run(abortAtStopped(beneficiary, nodeName, "8"), h.normalOpts()); code != 1 {
+	if code, out := h.run(interruptAtPlan(beneficiary, nodeName, "8"), h.normalOpts()); code != 1 {
 		t.Fatalf("setup exit %d:\n%s", code, out)
 	}
 	os.WriteFile(h.d.SecpNew, []byte("MOCK-KEYSTORE ikm="+strings.Repeat("f", 64)+" pw=testpass\n"), 0o600)
@@ -399,7 +399,7 @@ func TestStagedKeyChangedAfterConfirmationIsRefused(t *testing.T) {
 func TestStagedConfigChangedAfterSigningIsRefused(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
-	if code, out := h.run(abortAtStopped(beneficiary, nodeName, "8"), h.normalOpts()); code != 1 {
+	if code, out := h.run(interruptAtPlan(beneficiary, nodeName, "8"), h.normalOpts()); code != 1 {
 		t.Fatalf("setup exit %d:\n%s", code, out)
 	}
 	toml := h.read(h.d.TomlNew)
@@ -800,7 +800,7 @@ func TestInterruptedMaskIsNotMistakenForTheOperators(t *testing.T) {
 	// the observe-first rule, resume believing the operator masked the
 	// units. Simulate: reach cutover, mask by hand as the tool would, and
 	// leave state at the point just after mask_observed was written.
-	if code, out := h.run(abortAtStopped(beneficiary, nodeName, "8"), h.normalOpts()); code != 1 {
+	if code, out := h.run(interruptAtPlan(beneficiary, nodeName, "8"), h.normalOpts()); code != 1 {
 		t.Fatalf("setup exit %d:\n%s", code, out)
 	}
 	st := h.d.Store()
@@ -1235,7 +1235,7 @@ func TestFlagInputsSkipPromptsButNotConfirmations(t *testing.T) {
 	}
 	expect(t, out, "Beneficiary: "+beneficiary+" (flag)", "node_name: "+nodeName+" (flag)", "seq_num for this migration: 9 (flag)",
 		"seq_num      9 (flag)", "beneficiary  "+beneficiary+" (flag)", "node_name    "+nodeName+" (flag)",
-		"proceed with this plan?", "type STOPPED to confirm", "VALIDATOR PROMOTION COMPLETE")
+		"Confirm this plan and proceed with cutover? (y/N)", "VALIDATOR PROMOTION COMPLETE")
 	reject(t, out, "? beneficiary ›", "? node_name ›", "new seq_num", "Suggested for this migration", "Press Enter to use it")
 	if !tomlIn(h.read(h.p.NodeToml), "peer_discovery", "self_record_seq_num", "9") {
 		t.Error("flag sequence not signed")
@@ -1320,7 +1320,7 @@ func TestResumeBeforeCutoverShowsThePlanFromState(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
 	h.ep.IP = "198.51.100.99"
-	if code, out := h.run(abortAtStopped("", nodeName, "8"), Options{KeySourceDir: h.p.BackupRoot, PublicIP: publicIP}); code != 1 {
+	if code, out := h.run(interruptAtPlan("", nodeName, "8"), Options{KeySourceDir: h.p.BackupRoot, PublicIP: publicIP}); code != 1 {
 		t.Fatalf("setup exit %d:\n%s", code, out)
 	}
 	code, out := h.run(resumeStdin, Options{Resume: true})
@@ -1341,7 +1341,7 @@ func TestKeptNodeNameOutsideTheFlagCharsetStillResumes(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
 	os.WriteFile(h.p.NodeToml, []byte(strings.Replace(h.read(h.p.NodeToml), `node_name = "fullnode-one"`, `node_name = "my node (old)"`, 1)), 0o644)
-	if code, out := h.run(abortAtStopped(beneficiary, "", "8"), h.normalOpts()); code != 1 {
+	if code, out := h.run(interruptAtPlan(beneficiary, "", "8"), h.normalOpts()); code != 1 {
 		t.Fatalf("setup exit %d:\n%s", code, out)
 	}
 	code, out := h.run(resumeStdin, Options{Resume: true, PublicIP: publicIP})
@@ -1357,7 +1357,7 @@ func TestKeptNodeNameOutsideTheFlagCharsetStillResumes(t *testing.T) {
 func TestPublicIPFlagOnResumeAfterSigningIsIgnoredWithNotice(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
-	if code, out := h.run(abortAtStopped(beneficiary, nodeName, "8"), h.normalOpts()); code != 1 {
+	if code, out := h.run(interruptAtPlan(beneficiary, nodeName, "8"), h.normalOpts()); code != 1 {
 		t.Fatalf("setup exit %d:\n%s", code, out)
 	}
 	code, out := h.run(resumeStdin, Options{Resume: true, PublicIP: "203.0.113.99"})
@@ -1530,7 +1530,7 @@ func TestAbortPreservesLivePermissions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	code, out := h.run(abortAtStopped(beneficiary, nodeName, "8"), h.normalOpts())
+	code, out := h.run(interruptAtPlan(beneficiary, nodeName, "8"), h.normalOpts())
 	if code != 1 {
 		t.Fatalf("exit %d: %s", code, out)
 	}
@@ -1547,7 +1547,7 @@ func TestCommentedBeneficiaryResumes(t *testing.T) {
 	h.healthyEnv()
 	conf := strings.Replace(h.read(h.p.NodeToml), `beneficiary = "0x0000000000000000000000000000000000000000"`, `beneficiary = "`+beneficiary+`" # rewards`, 1)
 	os.WriteFile(h.p.NodeToml, []byte(conf), 0600)
-	code, out := h.run(abortAtStopped("", nodeName, "8"), h.normalOpts())
+	code, out := h.run(interruptAtPlan("", nodeName, "8"), h.normalOpts())
 	if code != 1 || h.stateValue("beneficiary") != beneficiary {
 		t.Fatalf("initial run: %s", out)
 	}
@@ -1666,7 +1666,7 @@ func TestStopPastDeadlineNeverSwapsAndResumeFinishes(t *testing.T) {
 func TestResumeSaysWhichFlagsItIgnores(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
-	if code, out := h.run(abortAtStopped(beneficiary, nodeName, "8"), h.normalOpts()); code != 1 {
+	if code, out := h.run(interruptAtPlan(beneficiary, nodeName, "8"), h.normalOpts()); code != 1 {
 		t.Fatalf("setup exit %d:\n%s", code, out)
 	}
 	code, out := h.run(resumeStdin, Options{Resume: true, PublicIP: publicIP, KeySourceDir: h.p.BackupRoot,
@@ -1767,4 +1767,41 @@ func TestFoundationReferenceConfigsMigrateIntact(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestPlanDefaultsToNo(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	before := h.liveSHAs()
+	opt := h.normalOpts()
+	opt.Beneficiary, opt.NodeName, opt.Seq = beneficiary, nodeName, "8"
+	code, out := h.run("\n", opt)
+	if code != 1 || h.liveSHAs() != before || h.stateExists() {
+		t.Fatalf("blank confirmation did not reject cleanly: exit=%d\n%s", code, out)
+	}
+	h.assertServicesUntouched()
+	expect(t, out, "Stop the old validator before continuing.", "Plan rejected")
+}
+
+func TestSingleConfirmationStartsCutover(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	opt := h.normalOpts()
+	opt.Beneficiary, opt.NodeName, opt.Seq = beneficiary, nodeName, "8"
+	code, out := h.run("y\n", opt)
+	if code != 0 {
+		t.Fatalf("single confirmation failed: %d\n%s", code, out)
+	}
+	prompt := "Confirm this plan and proceed with cutover? (y/N)"
+	if strings.Count(out, prompt) != 1 {
+		t.Fatal("expected exactly one plan confirmation")
+	}
+	warning := strings.Index(out, "Stop the old validator before continuing.")
+	confirmation := strings.Index(out, prompt)
+	stopped := strings.Index(out, "Services stopped")
+	if warning < 0 || warning >= confirmation || stopped <= confirmation {
+		t.Fatal("incorrect confirmation order")
+	}
+	reject(t, out, "type STOPPED")
+	expect(t, out, "VALIDATOR PROMOTION COMPLETE")
 }

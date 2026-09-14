@@ -25,7 +25,7 @@ func (r *Run) restoreFrom() string {
 	return r.p.BackupRoot
 }
 
-// ── phase 7: the plan, the STOPPED gate, then the swap ───────────────
+// ── phase 7: the plan confirmation, then the swap ───────────────
 
 func withSource(v, source string) string {
 	if source == "" {
@@ -129,7 +129,7 @@ func (r *Run) discardPlan() {
 }
 
 // confirmPlan is the one confirmation that covers every prepared value,
-// followed by the STOPPED gate for the old validator.
+// including the instruction to stop the old validator before proceeding.
 func (r *Run) confirmPlan() error {
 	r.showPlan()
 	r.c.Blank()
@@ -140,7 +140,16 @@ func (r *Run) confirmPlan() error {
 		r.c.Println("  Nothing on the live node has changed. Answering no removes the staged")
 		r.c.Println("  files and the run state, so the next run starts clean.")
 	}
-	if !r.c.ConfirmYN("proceed with this plan?") {
+	r.c.Blank()
+	r.c.Warn("Stop the old validator before continuing.")
+	r.c.Println("      " + ui.Bold + "systemctl stop monad-bft monad-execution monad-rpc" + ui.Reset)
+	r.c.Blank()
+	ans, err := r.c.Ask("Confirm this plan and proceed with cutover? (y/N)")
+	if err != nil {
+		return err
+	}
+	ans = strings.ToLower(strings.TrimSpace(ans))
+	if ans != "y" && ans != "yes" {
 		if started {
 			return ui.Die("Plan rejected, but the cutover had already begun; nothing more was changed.",
 				"Finish it with: "+r.opt.Argv0+" --resume",
@@ -152,18 +161,7 @@ func (r *Run) confirmPlan() error {
 			"The identity backup in "+r.restoreFrom()+" is kept. Re-run with the corrected inputs.")
 	}
 
-	r.c.Blank()
-	r.c.Warn("Stop the old validator before confirming cutover.")
-	r.c.Println("      " + ui.Bold + "systemctl stop monad-bft monad-execution monad-rpc" + ui.Reset)
-	r.c.Blank()
-	ans, err := r.c.Ask("type STOPPED to confirm")
-	if err != nil {
-		return err
-	}
-	if ans != "STOPPED" {
-		return ui.Die("Not confirmed — aborting before cutover.")
-	}
-	r.c.OK("Old validator confirmed stopped or offline")
+	r.c.OK("Cutover confirmed")
 	return nil
 }
 
