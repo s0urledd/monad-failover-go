@@ -136,6 +136,7 @@ func DryRun(c *ui.Console, p paths.Paths, keySourceDir, version string) int {
 		c.Step("VERIFY CONFIG FLAGS")
 		if missing := nodeconf.MissingConfigFlags(p.NodeToml); len(missing) > 0 {
 			c.Warn("Flags not set: " + strings.Join(missing, " "))
+			warns++
 			c.Println("  The official migration docs require these to be true.")
 		} else {
 			c.OK("enable_publisher, enable_client, expand_to_group all set")

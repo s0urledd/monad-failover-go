@@ -253,3 +253,18 @@ func TestMissingConfigFlags(t *testing.T) {
 		t.Errorf("all true: %v", got)
 	}
 }
+
+func TestRootValueCommentsQuotesAndDuplicates(t *testing.T) {
+	addr := "0x" + strings.Repeat("a", 40)
+	for _, value := range []string{`"` + addr + `" # rewards`, "'" + addr + "' # rewards"} {
+		p := write(t, "node.toml", "beneficiary = "+value+"\n[unrelated]\nbeneficiary=\"wrong\"\n")
+		got, err := ReadValue(p, "beneficiary", "")
+		if err != nil || got != addr {
+			t.Fatalf("got %q: %v", got, err)
+		}
+	}
+	p := write(t, "node.toml", `beneficiary = "`+addr+`"`+"\n"+`beneficiary = "`+addr+`"`)
+	if _, err := ReadValue(p, "beneficiary", ""); err == nil {
+		t.Fatal("duplicate accepted")
+	}
+}

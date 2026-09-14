@@ -126,17 +126,16 @@ func (r *Run) Prepare() (proceed bool, lock *state.RunLock, err error) {
 }
 
 func (r *Run) startLog() error {
-	if err := os.MkdirAll(r.p.LogDir, 0o700); err != nil {
-		return ui.Die("Could not create the log directory " + r.p.LogDir)
+	if err := place.PrivateDir(r.p.LogDir); err != nil {
+		return ui.Die("Cannot use log directory "+r.p.LogDir, err.Error())
 	}
-	_ = os.Chmod(r.p.LogDir, 0o700)
-	logPath := filepath.Join(r.p.LogDir, "failover-"+r.now().Format("20060102-150405")+".log")
-	f, err := os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	f, err := os.CreateTemp(r.p.LogDir, "failover-"+r.now().Format("20060102-150405")+"-*.log")
 	if err != nil {
-		return ui.Die("Could not open the run log " + logPath)
+		return ui.Die("Could not open the run log in " + r.p.LogDir)
 	}
 	// Secrets never appear in the output (hidden input, no echo), so the log
 	// is safe to keep; it is the operator's record of the migration.
+	logPath := f.Name()
 	r.c.Tee(f)
 	r.c.Printf("%s(logging this run to %s)%s\n", ui.Dim, logPath, ui.Reset)
 	return nil
@@ -159,6 +158,9 @@ func (r *Run) Promote() error {
 	}
 	if _, err := os.Stat(r.p.EnvFile); err != nil {
 		return ui.Die(".env not found: " + r.p.EnvFile)
+	}
+	if _, _, err := r.placementOwner(); err != nil {
+		return ui.Die("Cannot resolve the monad service account; refusing to prepare a cutover.")
 	}
 	pw := nodeconf.LoadKeystorePassword(r.p.EnvFile)
 	if len(pw) == 0 {
@@ -351,15 +353,19 @@ func (r *Run) locationGuard() error {
 // password is NOT copied: colocating it with the keys would defeat the
 // encryption.
 func (r *Run) backupConfig() error {
-	r.backupDir = filepath.Join(r.p.BackupRoot, "failover-"+r.now().Format("20060102-150405"))
-	if err := os.MkdirAll(r.backupDir, 0o700); err != nil {
-		return ui.Die("Could not create " + r.backupDir)
+	if err := place.PrivateDir(r.p.BackupRoot); err != nil {
+		return err
+	}
+	var err error
+	r.backupDir, err = os.MkdirTemp(r.p.BackupRoot, "failover-"+r.now().Format("20060102-150405")+"-")
+	if err != nil {
+		return err
 	}
 	_ = os.Chmod(r.backupDir, 0o700)
 	for _, f := range []string{"node.toml", "id-secp", "id-bls"} {
 		src := filepath.Join(r.p.ConfigDir, f)
-		if _, err := os.Stat(src); err != nil {
-			continue
+		if fi, err := os.Lstat(src); err != nil || !fi.Mode().IsRegular() {
+			return ui.Die("Cannot back up required identity file: " + src)
 		}
 		if err := place.CopyPreserve(src, filepath.Join(r.backupDir, f)); err != nil {
 			return ui.Die("Could not back up " + src + " to " + r.backupDir)
@@ -523,7 +529,13 @@ func (r *Run) configure() error {
 	}
 
 	r.c.Blank()
-	cur := nodeconf.TomlGet(r.d.TomlNew, "beneficiary")
+	cur, readErr := nodeconf.ReadValue(r.d.TomlNew, "beneficiary", "")
+	if readErr != nil {
+		return ui.Die("Cannot read an unambiguous beneficiary from node.toml.")
+	}
+	if !nodeconf.BeneficiaryRe.MatchString(cur) {
+		return ui.Die("Existing beneficiary must be a 0x-prefixed 40-hex-character address")
+	}
 	r.c.Println(ui.Bold + "BENEFICIARY" + ui.Reset)
 	r.c.Println("Enter the beneficiary address from the old validator's node.toml.")
 	r.c.Println("Leave blank to keep the address already in this node's config:")
@@ -699,6 +711,9 @@ func (r *Run) signRecord() error {
 	if err != nil {
 		return err
 	}
+	if signed.Address != r.ip+":8000" || signed.AuthPort != "8001" {
+		return ui.Die("Signer output does not match the requested IP and standard ports; refusing cutover.")
+	}
 	if warning != "" {
 		r.c.Warn(warning)
 		r.c.Println("  Safe to continue: the signature matches the emitted value.")
@@ -717,7 +732,12 @@ func (r *Run) signRecord() error {
 			return err
 		}
 	}
-	r.fixOwnership()
+	for _, kv := range [][2]string{{"self_address", signed.Address}, {"self_auth_port", signed.AuthPort}, {"self_record_seq_num", signed.Seq}, {"self_name_record_sig", signed.Sig}} {
+		value, err := nodeconf.ReadValue(r.d.TomlNew, kv[0], "peer_discovery")
+		if err != nil || value != kv[1] {
+			return ui.Die("Staged config does not match signer output: " + kv[0])
+		}
+	}
 	r.c.OK("node.toml patched and verified")
 
 	for _, kv := range [][2]string{
@@ -737,20 +757,10 @@ func (r *Run) signRecord() error {
 	return nil
 }
 
-// fixOwnership hands the config directory and .env to the monad account and
-// keeps the live keys private. Failures are ignored, as before: in the test
-// sandbox there is no monad user and no permission to chown.
-func (r *Run) fixOwnership() {
-	uid, gid, err := monad.MonadIDs()
-	if err == nil {
-		_ = filepath.WalkDir(r.p.ConfigDir, func(p string, _ os.DirEntry, err error) error {
-			if err == nil {
-				_ = os.Lchown(p, uid, gid)
-			}
-			return nil
-		})
-		_ = os.Chown(r.p.EnvFile, uid, gid)
+// placementOwner never changes the live config directory or .env.
+func (r *Run) placementOwner() (int, int, error) {
+	if r.p.Sandbox {
+		return os.Geteuid(), os.Getegid(), nil
 	}
-	_ = os.Chmod(r.p.SecpKey, 0o600)
-	_ = os.Chmod(r.p.BlsKey, 0o600)
+	return monad.MonadIDs()
 }

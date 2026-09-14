@@ -26,3 +26,4 @@ if [[ -n "${MOCK_STATUS_AFTER:-}" ]]; then
 fi
 echo "status: ${MOCK_STATUS:-in-sync}"
 echo "blockDifference: ${MOCK_BLOCK_DIFF:-0}"
+exit "${MOCK_STATUS_EXIT:-0}"

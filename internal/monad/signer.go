@@ -20,9 +20,11 @@ type Signed struct {
 }
 
 var seqRe = regexp.MustCompile(`^[0-9]+$`)
+var signatureRe = regexp.MustCompile(`^[0-9a-fA-F]{130}$`)
 
 func signerLine(out, key string) (string, bool) {
 	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, key+" ") {
 			return line, true
 		}
@@ -53,6 +55,17 @@ func lastField(line string) string {
 // warning the caller prints.
 func ParseSignerOutput(out string, requested string) (Signed, string, error) {
 	var s Signed
+	for _, key := range []string{"self_address", "self_tcp_port", "self_udp_port", "self_auth_port", "self_record_seq_num", "self_name_record_sig"} {
+		count := 0
+		for _, line := range strings.Split(out, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), key+" ") {
+				count++
+			}
+		}
+		if count > 1 {
+			return s, "", ui.Die("Duplicate signer field: " + key)
+		}
+	}
 	get := func(key string) string {
 		l, _ := signerLine(out, key)
 		return l
@@ -86,7 +99,7 @@ func ParseSignerOutput(out string, requested string) (Signed, string, error) {
 	}
 	s.Address = ip + ":" + tcp
 	s.AuthPort = auth
-	if s.Sig == "" {
+	if !signatureRe.MatchString(s.Sig) {
 		return s, "", ui.Die("Failed to parse self_name_record_sig from signer output")
 	}
 	if !seqRe.MatchString(s.Seq) {
@@ -95,8 +108,11 @@ func ParseSignerOutput(out string, requested string) (Signed, string, error) {
 
 	// Emitting LESS than requested would re-create the stale-seq ghost-node
 	// failure: hard stop. More (a +1 style version) is monotonic-safe.
-	got, _ := strconv.ParseUint(s.Seq, 10, 64)
-	want, _ := strconv.ParseUint(requested, 10, 64)
+	got, gotErr := strconv.ParseUint(s.Seq, 10, 64)
+	want, wantErr := strconv.ParseUint(requested, 10, 64)
+	if gotErr != nil || wantErr != nil {
+		return s, "", ui.Die("Signer sequence is outside uint64 range")
+	}
 	warning := ""
 	switch {
 	case got < want:

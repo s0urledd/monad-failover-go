@@ -24,6 +24,10 @@ _premask_seed() {
 _premask_seed
 
 case "${1:-}" in
+  show)
+    [[ -n "${MOCK_QUERY_FAIL:-}" ]] && exit 1
+    [[ -f "$MARKER" ]] && echo active || echo inactive
+    exit 0 ;;
   mask)
     [[ -n "${MOCK_MASK_FAIL:-}" ]] && exit 0
     mkdir -p "$MASKDIR"; shift
@@ -52,6 +56,7 @@ case "${1:-}" in
     done
     ;;&
   stop)
+    [[ -n "${MOCK_STOP_FAIL:-}" ]] && exit 1
     rm -f "$MARKER"
     exit 0 ;;
   start)

@@ -1,9 +1,11 @@
 package nodeconf
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/s0urledd/monad-failover-go/internal/ui"
@@ -107,22 +109,84 @@ func writeAtomic(file, content string) error {
 
 // TomlGet returns the first `key = value` in the file, unquoted, "" when
 // absent. It is used only for values this tool also writes at the root.
+// literal handles comments outside strings and both TOML string quote forms.
+func literal(value string) (string, error) {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return "", fmt.Errorf("empty TOML value")
+	}
+	if v[0] == '"' || v[0] == '\'' {
+		quote := v[0]
+		escaped := false
+		for i := 1; i < len(v); i++ {
+			if quote == '"' && !escaped && v[i] == '\\' {
+				escaped = true
+				continue
+			}
+			if v[i] == quote && !escaped {
+				tail := strings.TrimSpace(v[i+1:])
+				if tail != "" && !strings.HasPrefix(tail, "#") {
+					return "", fmt.Errorf("unexpected text after TOML string")
+				}
+				if quote == '\'' {
+					return v[1:i], nil
+				}
+				return strconv.Unquote(v[:i+1])
+			}
+			escaped = false
+		}
+		return "", fmt.Errorf("unterminated TOML string")
+	}
+	if i := strings.Index(v, "#"); i >= 0 {
+		v = v[:i]
+	}
+	return strings.TrimSpace(v), nil
+}
+
+// ReadValue requires exactly one field in its own table.
+func ReadValue(file, key, section string) (string, error) {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return "", err
+	}
+	active := section == ""
+	count := 0
+	value := ""
+	keyRe := regexp.MustCompile(`^\s*` + regexp.QuoteMeta(key) + `\s*=`)
+	for _, line := range strings.Split(string(data), "\n") {
+		if headerRe.MatchString(line) {
+			active = section != "" && tableHeader(line) == "["+section+"]"
+			continue
+		}
+		if active && keyRe.MatchString(line) {
+			count++
+			value, err = literal(line[strings.Index(line, "=")+1:])
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+	if count != 1 {
+		return "", fmt.Errorf("expected one %s in [%s], found %d", key, section, count)
+	}
+	return value, nil
+}
+
 func TomlGet(file, key string) string {
+	if key == "beneficiary" || key == "node_name" {
+		v, _ := ReadValue(file, key, "")
+		return v
+	}
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return ""
 	}
 	keyRe := regexp.MustCompile(`^\s*` + regexp.QuoteMeta(key) + `\s*=`)
 	for _, line := range strings.Split(string(data), "\n") {
-		if !keyRe.MatchString(line) {
-			continue
+		if keyRe.MatchString(line) {
+			v, _ := literal(line[strings.Index(line, "=")+1:])
+			return v
 		}
-		v := line[strings.Index(line, "=")+1:]
-		v = strings.TrimLeft(v, " \t")
-		v = strings.TrimPrefix(v, `"`)
-		v = strings.TrimRight(v, " \t")
-		v = strings.TrimSuffix(v, `"`)
-		return v
 	}
 	return ""
 }

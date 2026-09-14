@@ -60,3 +60,6 @@ jobs:
       # Monad binaries in tests/mocks; no root, network or systemd needed.
       - name: go test
         run: go test ./...
+
+      - name: Root ownership regressions
+        run: sudo "$(command -v go)" test ./internal/place -run 'TestPrivateDirForeignOwnerRoot|TestPlacedOwnershipRoot'

@@ -28,7 +28,7 @@ modules; every import is from the Go standard library. Concretely, it:
 
 It contains no telemetry and never transmits your keys or password anywhere.
 The process runs with umask `077`, so every file it creates (key backups,
-resume state, staging, logs) is never world-readable, and the keystore
+resume state, staging, logs) starts private, and the keystore
 password is never written alongside the encrypted keystores.
 
 `secp-backup` and `bls-backup` contain **unencrypted secret IKM**, both when you
@@ -59,23 +59,20 @@ The keystore password and the IKM pass through this process. What the tool
 does about that inside its own memory:
 
 - Both are held as byte buffers and are turned into strings only for the
-  instant a child process's argument vector is built. Every buffer this code
-  owns is zeroed as soon as it is no longer needed: the `.env` contents, the
+  instant a child process's argument vector is built. The explicit byte buffers managed by this code are zeroed after use: the `.env` contents, the
   backup file contents, a typed IKM, the parsed values, and the output of
   `monad-keystore recover`, which carries the secret alongside the public
-  key. The password is zeroed when the run ends.
+  key. The password byte buffer is zeroed when the run ends. Temporary strings and buffered terminal input may retain additional copies.
 - After every command that carried a secret on its argument vector, the
   garbage collector runs and free memory is returned to the kernel.
-- The process cannot dump core and is not dumpable, so no crash file carries
-  the values. As root its memory is locked and never paged out to swap.
+- Core dumps are disabled and the process dumpable flag is cleared on a best-effort basis. Memory locking is attempted as root; platform limits or missing capabilities can prevent it.
 
 What it cannot do: the copy Go makes of each argument for `execve` belongs to
 the runtime. It is collected, not zeroed, and can stay in a reused page until
 something overwrites it. A memory image of the process taken while a key
 command runs, or shortly after, can contain the values. Anyone able to take
 such an image is root, and root already holds the password in `.env` and the
-IKM in the backup files; what the measures above close are the routes by
-which memory leaves the machine on its own, core dumps and swap. A VM
+IKM in the backup files; these best-effort measures reduce exposure through core dumps and swap; they are not an unconditional guarantee. A VM
 snapshot is outside their reach.
 
 ## Resume state is a root trust boundary
@@ -220,3 +217,16 @@ Report vulnerabilities privately via
 [GitHub security advisories](https://github.com/s0urledd/monad-failover-go/security/advisories/new)
 rather than public issues. Reports are acknowledged on a best-effort basis, and
 key-handling issues are treated as top priority.
+
+## Backup and metadata boundaries
+
+Backup and log directories are checked for symlinks, foreign ownership and
+writable ancestors before secret files are created. Existing trusted directories
+are restricted to 0700. A root-owned sticky temporary directory is permitted as
+an ancestor of an owned private test directory, not as the backup directory itself.
+Exports use unique O_EXCL temporary files and rename; a pre-existing predictable
+.partial path is never opened. Prior backups are kept under unique .bak names.
+
+Preparation does not change the live config directory, .env or key permissions.
+Placement sets and checks the three destination files' ownership and 0600 mode
+before services are unmasked; the surrounding config directory retains its owner.

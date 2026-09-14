@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 
 	"github.com/s0urledd/monad-failover-go/internal/state"
 	"github.com/s0urledd/monad-failover-go/internal/ui"
@@ -101,12 +102,19 @@ var ErrNotPlaced = errors.New("could not place file")
 // attempt, (false, nil) when it was placed now, ErrNotPlaced when nothing
 // changed, and a Fatal when the node must not be started.
 func Verified(staged, live, want, label, restoreFrom string) (already bool, err error) {
+	return VerifiedOwned(staged, live, want, label, restoreFrom, os.Geteuid(), os.Getegid())
+}
+
+func VerifiedOwned(staged, live, want, label, restoreFrom string, uid, gid int) (already bool, err error) {
 	if _, statErr := os.Lstat(staged); statErr != nil {
 		if isSymlink(live) {
 			return false, ui.Die(live + " is a symlink — refusing to continue.")
 		}
 		if !isRegular(live) || FileSHA(live) != want {
 			return false, ui.Die(label + " is neither staged nor already in place with the confirmed content.")
+		}
+		if err := CheckMetadata(live, uid, gid); err != nil {
+			return false, err
 		}
 		return true, nil
 	}
@@ -123,6 +131,16 @@ func Verified(staged, live, want, label, restoreFrom string) (already bool, err 
 	dst, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return false, ErrNotPlaced
+	}
+	if err := dst.Chown(uid, gid); err != nil {
+		dst.Close()
+		os.Remove(tmp)
+		return false, err
+	}
+	if err := dst.Chmod(0600); err != nil {
+		dst.Close()
+		os.Remove(tmp)
+		return false, err
 	}
 	if _, err := io.Copy(dst, src); err != nil {
 		dst.Close()
@@ -150,6 +168,9 @@ func Verified(staged, live, want, label, restoreFrom string) (already bool, err 
 	if FileSHA(live) != want {
 		return false, ui.Die(label+" does not match its confirmed checksum after placement.",
 			"Do NOT start the services. Restore this node from "+restoreFrom+".")
+	}
+	if err := SyncDir(filepath.Dir(live)); err != nil {
+		return false, err
 	}
 	_ = os.Remove(staged)
 	return false, nil
@@ -184,15 +205,31 @@ func CopyPreserve(src, dst string) error {
 		return err
 	}
 	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fi.Mode().Perm())
+	out, err := os.CreateTemp(filepath.Dir(dst), ".identity-copy-*")
 	if err != nil {
+		return err
+	}
+	tmp := out.Name()
+	defer os.Remove(tmp)
+	if err := out.Chmod(fi.Mode().Perm()); err != nil {
+		out.Close()
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
 		out.Close()
 		return err
 	}
+	if err := out.Sync(); err != nil {
+		out.Close()
+		return err
+	}
 	if err := out.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		return err
+	}
+	if err := SyncDir(filepath.Dir(dst)); err != nil {
 		return err
 	}
 	_ = os.Chmod(dst, fi.Mode().Perm())

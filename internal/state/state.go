@@ -69,7 +69,7 @@ func RefuseLegacy(monadHome, backupRoot string) error {
 				"Found state from an older version at "+f+".",
 				"That path is under "+monadHome+" and writable by the monad service",
 				"account, so it is not trusted and is not migrated automatically.",
-				"Review it, then remove the directory:  rm -rf "+legacy,
+				"Preserve it for inspection; follow docs/recovery.md before removing old state.",
 				"If a previous run was interrupted, restore this node from "+backupRoot,
 				"and start a fresh run rather than resuming from it.")
 		}
@@ -113,13 +113,13 @@ func (d Dir) Secure(euid int, backupRoot string) error {
 	if m := modeBits(fi); m != 0o700 {
 		return ui.Die(fmt.Sprintf("%s has mode %o, not 700; refusing to use it.", d.Root, m),
 			"It may have been writable by another user, so its contents are not",
-			"trusted. Remove it and re-run:  rm -rf "+d.Root)
+			"trusted. Keep the state for recovery; see docs/recovery.md.")
 	}
 	if euid == 0 {
 		if uid, ok := ownerUID(fi); ok && uid != 0 {
 			return ui.Die(fmt.Sprintf("%s is owned by uid %d, not root; refusing to use it.", d.Root, uid),
 				"Resume state must not be writable by the monad service account.",
-				"Remove it and re-run:  rm -rf "+d.Root)
+				"Keep the state for recovery; see docs/recovery.md before changing this directory.")
 		}
 	}
 
@@ -134,6 +134,11 @@ func (d Dir) Secure(euid int, backupRoot string) error {
 	if _, err := os.Stat(d.Staging); err != nil {
 		if err := os.MkdirAll(d.Staging, 0o700); err != nil {
 			return ui.Die("Could not create " + d.Staging)
+		}
+	}
+	if fi, err := os.Stat(d.Staging); err == nil && euid == 0 {
+		if uid, ok := ownerUID(fi); !ok || uid != 0 {
+			return ui.Die(d.Staging + " is not owned by root; refusing to use it.")
 		}
 	}
 	if fi, err := os.Stat(d.Staging); err != nil || modeBits(fi) != 0o700 {
@@ -255,7 +260,12 @@ func (s Store) Set(key, value string) error {
 		os.Remove(name)
 		return ui.Die("Could not write to " + s.dir.Root)
 	}
-	return nil
+	dir, err := os.Open(s.dir.Root)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }
 
 // Clear removes the state file.

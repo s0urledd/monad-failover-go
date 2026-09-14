@@ -24,6 +24,9 @@ jobs:
           echo "code: v$ver  tag: $GITHUB_REF_NAME"
           test "v$ver" = "$GITHUB_REF_NAME"
 
+      - name: Release regression tests
+        run: go test ./...
+
       - name: Reproducible release build (linux/amd64)
         run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o monad-failover ./cmd/monad-failover
 

@@ -130,7 +130,6 @@ func (r *Run) cutover() error {
 			}
 			return err
 		}
-		r.fixOwnership()
 
 		// Stage boundary: the files are in place. Bringing the services back
 		// up is a separately resumable step, so an interruption here cannot
@@ -169,7 +168,11 @@ func (r *Run) cutover() error {
 }
 
 func (r *Run) placeOne(staged, live, key, label string) error {
-	already, err := place.Verified(staged, live, r.st.Get(key), label, r.restoreFrom())
+	uid, gid, err := r.placementOwner()
+	if err != nil {
+		return err
+	}
+	already, err := place.VerifiedOwned(staged, live, r.st.Get(key), label, r.restoreFrom(), uid, gid)
 	if err != nil {
 		return err
 	}
@@ -203,7 +206,11 @@ func (r *Run) maskServices() error {
 	if r.st.Get("mask_observed") != "1" {
 		var pre []string
 		for _, u := range systemd.Units {
-			if systemd.IsMasked(u) {
+			masked, err := systemd.Masked(u)
+			if err != nil {
+				return err
+			}
+			if masked {
 				pre = append(pre, u)
 			}
 		}
@@ -216,7 +223,11 @@ func (r *Run) maskServices() error {
 	}
 	systemd.Mask(systemd.Units...)
 	for _, u := range systemd.Units {
-		if !systemd.IsMasked(u) {
+		masked, err := systemd.Masked(u)
+		if err != nil {
+			return err
+		}
+		if !masked {
 			return ui.Die("Could not mask "+u+" — refusing to start the swap.",
 				"Without a mask, a reboot mid-swap would start this node with a",
 				"half-swapped identity. Nothing has been changed.",
@@ -232,11 +243,17 @@ func (r *Run) maskServices() error {
 
 func (r *Run) stopServices() error {
 	r.c.Step("STOP MONAD SERVICES")
-	systemd.Stop(r.c.Out, systemd.Units...)
+	if err := systemd.Stop(r.c.Out, systemd.Units...); err != nil {
+		return ui.Die("Could not stop all services; refusing to swap files.", "Check systemd, then continue with: "+r.opt.Argv0+" --resume")
+	}
 	r.sleep(time.Second)
 	still := false
 	for _, u := range systemd.Units {
-		if systemd.IsActive(u) {
+		active, err := systemd.ActiveState(u)
+		if err != nil {
+			return err
+		}
+		if active != "inactive" && active != "failed" {
 			still = true
 			r.c.Warn(u + " still running")
 		}
@@ -258,7 +275,11 @@ func (r *Run) unmaskServices() error {
 			continue
 		}
 		systemd.Unmask(u)
-		if systemd.IsMasked(u) {
+		masked, err := systemd.Masked(u)
+		if err != nil {
+			return err
+		}
+		if masked {
 			failed = append(failed, u)
 		}
 	}
@@ -283,6 +304,15 @@ func (r *Run) verifyLiveIdentity() error {
 	}
 	if err := place.CheckLive(r.p.NodeToml, r.st.Get("staged_toml_sha"), "node.toml", r.restoreFrom()); err != nil {
 		return err
+	}
+	uid, gid, err := r.placementOwner()
+	if err != nil {
+		return err
+	}
+	for _, p := range []string{r.p.SecpKey, r.p.BlsKey, r.p.NodeToml} {
+		if err := place.CheckMetadata(p, uid, gid); err != nil {
+			return err
+		}
 	}
 	r.c.OK("Live identity matches what was placed")
 	return nil
@@ -362,19 +392,31 @@ func (r *Run) postVerify() error {
 		return nil
 	}
 	limit := r.p.SyncWait
-	var waited time.Duration
+	deadline := time.Now().Add(limit)
 	var status string
 	for {
-		status, _, _ = monad.Status()
+		timeout := 30 * time.Second
+		if limit > 0 && time.Until(deadline) < timeout {
+			timeout = time.Until(deadline)
+		}
+		if timeout <= 0 {
+			break
+		}
+		status, _, _ = monad.StatusWithin(timeout)
 		if status == "in-sync" {
 			r.c.OK("Node is in-sync")
 			return nil
 		}
-		if waited >= limit {
+		if limit <= 0 || !time.Now().Before(deadline) {
 			break
 		}
-		r.sleep(5 * time.Second)
-		waited += 5 * time.Second
+		pause := 5 * time.Second
+		if remaining := time.Until(deadline); remaining < pause {
+			pause = remaining
+		}
+		if pause > 0 {
+			r.sleep(pause)
+		}
 	}
 	r.verifyPending = true
 	if status == "" {
@@ -430,7 +472,7 @@ func (r *Run) checkUptimeAPI() {
 // otherwise the printed --resume advice would find nothing to resume.
 func (r *Run) refreshKeyBackups() error {
 	r.c.Step("REFRESH KEY BACKUPS")
-	if err := os.MkdirAll(r.p.BackupRoot, 0o700); err != nil {
+	if err := place.PrivateDir(r.p.BackupRoot); err != nil {
 		return err
 	}
 	_ = os.Chmod(r.p.BackupRoot, 0o700)
@@ -438,8 +480,22 @@ func (r *Run) refreshKeyBackups() error {
 	se := filepath.Join(r.p.BackupRoot, "secp-backup")
 	bl := filepath.Join(r.p.BackupRoot, "bls-backup")
 	for _, f := range []string{se, bl} {
-		if _, err := os.Stat(f); err == nil {
-			_ = os.Rename(f, f+"."+ts+".bak")
+		if _, err := os.Lstat(f); err == nil {
+			reserved, err := os.CreateTemp(r.p.BackupRoot, filepath.Base(f)+"."+ts+"-*.bak")
+			if err != nil {
+				return err
+			}
+			name := reserved.Name()
+			if err := reserved.Close(); err != nil {
+				os.Remove(name)
+				return err
+			}
+			if err := os.Rename(f, name); err != nil {
+				os.Remove(name)
+				return err
+			}
+		} else if !os.IsNotExist(err) {
+			return err
 		}
 	}
 	err := r.tools.ExportBackup(r.p.SecpKey, "secp", se)
@@ -448,7 +504,7 @@ func (r *Run) refreshKeyBackups() error {
 	}
 	if err != nil {
 		r.c.Warn("Could not re-export key backups.")
-		r.c.Println("  Previous copies are preserved as *." + ts + ".bak in " + r.p.BackupRoot + ".")
+		r.c.Println("  Previous copies are preserved as *.bak in " + r.p.BackupRoot + ".")
 		return err
 	}
 	r.c.OK("Key backups exported: " + r.p.BackupRoot + "/{secp-backup,bls-backup}")

@@ -12,13 +12,17 @@ package monad
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"github.com/s0urledd/monad-failover-go/internal/place"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/s0urledd/monad-failover-go/internal/ui"
 )
@@ -60,11 +64,7 @@ func (t Tools) ImportKey(ikm []byte, path string) error {
 			"(Its output is suppressed so secrets can never reach the run log.)",
 			"Check the keystore password in "+t.EnvFile+" and the IKM source, then re-run.")
 	}
-	if uid, gid, ok := monadIDs(); ok {
-		_ = os.Chown(path, uid, gid)
-	}
-	_ = os.Chmod(path, 0o600)
-	return nil
+	return os.Chmod(path, 0o600)
 }
 
 // RecoverPubkey returns the public key printed by `monad-keystore recover`
@@ -80,11 +80,14 @@ func (t Tools) RecoverPubkey(path, keyType string) string {
 		"--key-type", keyType)
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, io.Discard
-	_ = cmd.Run()
+	runErr := cmd.Run()
 	// The output also carries the secret ("Keystore secret: ..."). Only the
 	// public key line is copied out; the buffer is zeroed before returning.
 	defer scrub()
 	defer ui.Zero(out.Bytes())
+	if runErr != nil {
+		return ""
+	}
 	for _, line := range bytes.Split(out.Bytes(), []byte("\n")) {
 		if !containsFold(line, []byte(label)) {
 			continue
@@ -113,11 +116,15 @@ func containsFold(line, label []byte) bool {
 // out, atomically: the tool's output goes to out+".partial" and is renamed
 // into place only on success, so a failure never leaves a truncated file.
 func (t Tools) ExportBackup(path, keyType, out string) error {
-	partial := out + ".partial"
-	f, err := os.OpenFile(partial, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err := place.PrivateDir(filepath.Dir(out)); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(filepath.Dir(out), ".key-backup-*")
 	if err != nil {
 		return err
 	}
+	partial := f.Name()
+	defer os.Remove(partial)
 	cmd := exec.Command("monad-keystore", "recover",
 		"--password", string(t.Password),
 		"--keystore-path", path,
@@ -125,7 +132,11 @@ func (t Tools) ExportBackup(path, keyType, out string) error {
 	cmd.Stdout, cmd.Stderr = f, io.Discard
 	runErr := cmd.Run()
 	scrub()
+	syncErr := f.Sync()
 	closeErr := f.Close()
+	if syncErr != nil {
+		return syncErr
+	}
 	if runErr != nil || closeErr != nil {
 		os.Remove(partial)
 		if runErr != nil {
@@ -137,8 +148,7 @@ func (t Tools) ExportBackup(path, keyType, out string) error {
 		os.Remove(partial)
 		return err
 	}
-	_ = os.Chmod(out, 0o600)
-	return nil
+	return place.SyncDir(filepath.Dir(out))
 }
 
 // SignNameRecord runs the signer with the standard P2P ports and returns its
@@ -168,11 +178,17 @@ func (t Tools) SignNameRecord(ip, seq, keystorePath string) (string, error) {
 
 // Status runs monad-status and returns the status and blockDifference
 // fields. ok is false when the tool is missing or printed no status.
-func Status() (status, blockDiff string, ok bool) {
-	cmd := exec.Command("monad-status")
+func Status() (status, blockDiff string, ok bool) { return StatusWithin(30 * time.Second) }
+
+func StatusWithin(limit time.Duration) (status, blockDiff string, ok bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "monad-status")
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, io.Discard
-	_ = cmd.Run()
+	if cmd.Run() != nil {
+		return "", "", false
+	}
 	for _, line := range strings.Split(out.String(), "\n") {
 		f := strings.Fields(line)
 		if len(f) < 2 {

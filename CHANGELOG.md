@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.1 — 2026-09-14
+
+Testnet preparation fixes.
+
+- Refuse cutover when service stop or state queries fail.
+- Reject failed sync commands and bound post-cutover sync queries by a deadline.
+- Write backups through unique private temporary files; refuse unsafe backup/log directories.
+- Keep live ownership and permissions unchanged during preparation; verify ownership on placed files.
+- Read beneficiary comments and quoted values correctly; validate signer fields and config readback.
+- Preserve prior exports with unique backup names; sync parent directories after placement/state renames.
+- Add regression tests, including root ownership checks.
+
+
 ## 0.1.0 — 2026-09-14
 
 First release.

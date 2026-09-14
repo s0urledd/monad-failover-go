@@ -1232,3 +1232,113 @@ func TestDryRunWarnsOnBackupWithoutIKM(t *testing.T) {
 	}
 	expect(t, out, "exists but contains no valid IKM", "Preflight passed")
 }
+
+func TestStopAndQueryFailuresNeverPlaceFiles(t *testing.T) {
+	for _, key := range []string{"MOCK_STOP_FAIL", "MOCK_QUERY_FAIL"} {
+		t.Run(key, func(t *testing.T) {
+			h := newHarness(t)
+			h.healthyEnv()
+			before := h.liveSHAs()
+			t.Setenv(key, "1")
+			code, out := h.normalRun()
+			if code != 1 {
+				t.Fatalf("exit %d: %s", code, out)
+			}
+			if h.liveSHAs() != before {
+				t.Fatal("identity changed without confirmed stop")
+			}
+			reject(t, out, "Services stopped", "VALIDATOR PROMOTION COMPLETE")
+			if strings.Contains(h.mockLog(), "systemctl start") {
+				t.Fatal("services started after failed stop/query")
+			}
+		})
+	}
+}
+
+func TestNonzeroStatusNeverPassesPreflight(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	t.Setenv("MOCK_STATUS_EXIT", "1")
+	code, out := h.normalRun()
+	if code != 1 {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+	h.assertServicesUntouched()
+	code, out = h.dryRun(h.p.BackupRoot)
+	if code != 1 {
+		t.Fatalf("dry run exit %d: %s", code, out)
+	}
+}
+
+func TestAbortPreservesLivePermissions(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	files := []string{h.p.ConfigDir, h.p.EnvFile, h.p.SecpKey, h.p.BlsKey}
+	modes := []os.FileMode{0750, 0640, 0640, 0640}
+	for i, f := range files {
+		if err := os.Chmod(f, modes[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	code, out := h.run("y\ny\n"+beneficiary+"\n"+nodeName+"\n8\nnope\n", h.normalOpts())
+	if code != 1 {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+	for i, f := range files {
+		fi, err := os.Stat(f)
+		if err != nil || fi.Mode().Perm() != modes[i] {
+			t.Errorf("permissions changed before confirmation: %s", f)
+		}
+	}
+}
+
+func TestCommentedBeneficiaryResumes(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	conf := strings.Replace(h.read(h.p.NodeToml), `beneficiary = "0x0000000000000000000000000000000000000000"`, `beneficiary = "`+beneficiary+`" # rewards`, 1)
+	os.WriteFile(h.p.NodeToml, []byte(conf), 0600)
+	code, out := h.run("y\ny\n\ny\n"+nodeName+"\n8\nnope\n", h.normalOpts())
+	if code != 1 || h.stateValue("beneficiary") != beneficiary {
+		t.Fatalf("initial run: %s", out)
+	}
+	code, out = h.run("STOPPED\ny\n", Options{Resume: true, PublicIP: publicIP})
+	if code != 0 {
+		t.Fatalf("resume failed: %s", out)
+	}
+}
+
+func TestExportIgnoresPredictablePartialSymlink(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	victim := filepath.Join(h.root, "unrelated")
+	os.WriteFile(victim, []byte("do not change"), 0600)
+	if err := os.Symlink(victim, filepath.Join(h.p.BackupRoot, "secp-backup.partial")); err != nil {
+		t.Fatal(err)
+	}
+	code, out := h.normalRun()
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+	if h.read(victim) != "do not change" {
+		t.Fatal("followed predictable partial symlink")
+	}
+	fi, _ := os.Stat(filepath.Join(h.p.BackupRoot, "secp-backup"))
+	if fi.Mode().Perm() != 0600 {
+		t.Fatal("backup is not private")
+	}
+}
+
+func TestDryRunCountsConfigWarnings(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	code, out := h.dryRun(h.p.BackupRoot)
+	if code != 0 {
+		t.Fatal(out)
+	}
+	// Fixture flags are false; every displayed warning must contribute.
+	re := regexp.MustCompile(`([0-9]+) warning\(s\)`)
+	matches := re.FindStringSubmatch(out)
+	if len(matches) != 2 || matches[1] == "0" {
+		t.Fatalf("warning not counted: %s", out)
+	}
+}

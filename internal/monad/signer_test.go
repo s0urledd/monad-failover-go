@@ -68,3 +68,16 @@ func TestParseSignerOutputRefusals(t *testing.T) {
 		}
 	}
 }
+
+func TestSignerMalformedFieldsRefused(t *testing.T) {
+	out := fixture(t)
+	for _, bad := range []string{
+		strings.Replace(out, quoted(func() string { l, _ := signerLine(out, "self_name_record_sig"); return l }()), "not-a-signature", 1),
+		strings.Replace(out, "self_record_seq_num = 2", "self_record_seq_num = 18446744073709551616", 1),
+		out + "\nself_record_seq_num = 2\n",
+	} {
+		if _, _, err := ParseSignerOutput(bad, "2"); err == nil {
+			t.Fatal("malformed signer output accepted")
+		}
+	}
+}

@@ -191,9 +191,11 @@ func (c *Console) AskHidden(label string) ([]byte, error) {
 	fmt.Fprintf(c.Out, "  %s?%s %s › ", Cyan, Reset, label)
 	restore := func() {}
 	if c.isTTY {
-		if r, err := disableEcho(c.inFd); err == nil {
-			restore = r
+		r, err := disableEcho(c.inFd)
+		if err != nil {
+			return nil, Die("Cannot disable terminal echo; use key backup files instead.")
 		}
+		restore = r
 	}
 	ans, err := c.readLine()
 	restore()
