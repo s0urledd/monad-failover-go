@@ -75,8 +75,8 @@ The binary is static. It calls `systemctl`, `monad-keystore`,
 ## Run
 
 ```bash
-# Check the node. Nothing is changed.
-monad-failover --dry-run
+# Check the node and the backup files. Nothing is changed.
+monad-failover --dry-run --backup-dir /path/to/validator-backups
 
 # Migrate. Asks where the backups are, for the beneficiary, node name and
 # sequence number, shows the plan, and changes nothing until you confirm
@@ -93,12 +93,12 @@ monad-failover --backup-dir /path/to/validator-backups \
 
 | Flag | Effect |
 |---|---|
-| `--dry-run` | Checks only; nothing is changed. With `--backup-dir`, the backup files are checked too |
-| `--backup-dir PATH` | Directory holding the validator's two backup files. Asked for if omitted |
+| `--dry-run` | Checks only; nothing is changed |
+| `--backup-dir PATH` | Directory holding the validator's two backup files. The run asks for it if omitted |
 | `--beneficiary 0xADDRESS` | Beneficiary address |
 | `--node-name NAME` | `node_name` taken over from the old validator |
 | `--seq N` | Name record sequence, higher than any this identity has used |
-| `--public-ip IP` | Use this IPv4 instead of automatic detection |
+| `--public-ip IP` | Only when detection fails or is wrong: use this IPv4 in the name record |
 | `--resume` | Continue an interrupted run |
 | `--version` | Print the tool version |
 
