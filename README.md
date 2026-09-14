@@ -63,7 +63,8 @@ install -m 755 monad-failover /usr/local/bin/monad-failover
 To build from source, install Go 1.24.7 or later and run:
 
 ```bash
-git clone https://github.com/s0urledd/monad-failover-go && cd monad-failover-go && git checkout v0.2.2
+git clone https://github.com/s0urledd/monad-failover-go
+cd monad-failover-go && git checkout v0.2.2
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o monad-failover ./cmd/monad-failover
 install -m 755 monad-failover /usr/local/bin/monad-failover
 ```
