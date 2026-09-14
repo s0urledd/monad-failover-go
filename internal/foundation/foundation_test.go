@@ -2,6 +2,7 @@ package foundation
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ func TestLookupGuards(t *testing.T) {
 		wantNote string
 	}{
 		{"published sequence", testutil.Snapshot(testutil.SnapshotOpts{}), nil, "testnet", secp, bls, 7, ""},
-		{"case-insensitive key match", testutil.Snapshot(testutil.SnapshotOpts{}), nil, "testnet", "0xsecp1111111111111111111111111111111111111111", bls, 7, ""},
+		{"prefixed and upper-case key still matches", testutil.Snapshot(testutil.SnapshotOpts{}), nil, "testnet", "0x" + secp, "0X" + strings.ToUpper(bls), 7, ""},
 		{"reordered fields", testutil.Snapshot(testutil.SnapshotOpts{Reorder: true}), nil, "testnet", secp, bls, 7, ""},
 		{"unreachable", "", errors.New("dial"), "testnet", secp, bls, 0, "snapshot unreachable"},
 		{"empty body", "", nil, "testnet", secp, bls, 0, "snapshot unreachable"},

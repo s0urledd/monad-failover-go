@@ -14,12 +14,38 @@ import (
 // Units are the services a migration manages, in the order the tool names them.
 var Units = []string{"monad-bft", "monad-execution", "monad-rpc"}
 
+// StopTimeout bounds `systemctl stop`, which blocks until every unit has
+// exited or hit its own TimeoutStopSec. Execution can take minutes to flush
+// on shutdown; the other commands answer in seconds. A variable so the test
+// suite can shorten it.
+var StopTimeout = 15 * time.Minute
+
 func run(stdout, stderr io.Writer, args ...string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	return runWithin(2*time.Minute, stdout, stderr, args...)
+}
+
+func runWithin(limit time.Duration, stdout, stderr io.Writer, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "systemctl", args...)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	return cmd.Run()
+}
+
+// UnitFile returns the path systemd loaded the unit from, "" when the unit
+// is not found. A unit whose file lives in /etc/systemd/system cannot be
+// masked: mask works by placing a symlink at exactly that path.
+func UnitFile(unit string) (string, error) {
+	var out bytes.Buffer
+	if err := run(&out, io.Discard, "show", "--property=FragmentPath", "--value", unit); err != nil {
+		return "", fmt.Errorf("cannot query %s: %w", unit, err)
+	}
+	return strings.TrimSpace(out.String()), nil
+}
+
+// Maskable reports whether mask can take effect for a unit at path.
+func Maskable(path string) bool {
+	return path != "" && !strings.HasPrefix(path, "/etc/systemd/system/")
 }
 
 // IsEnabled returns the first line systemctl prints ("masked", "enabled",
@@ -49,7 +75,7 @@ func Unmask(unit string) { _ = run(io.Discard, io.Discard, "unmask", unit) }
 
 // Stop stops all units; the caller checks is-active afterwards.
 func Stop(stdout io.Writer, units ...string) error {
-	return run(stdout, io.Discard, append([]string{"stop"}, units...)...)
+	return runWithin(StopTimeout, stdout, io.Discard, append([]string{"stop"}, units...)...)
 }
 
 // Enable enables the units. Failure is ignored: enabling is best effort,

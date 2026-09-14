@@ -9,6 +9,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"syscall"
 
 	"github.com/s0urledd/monad-failover-go/internal/harden"
@@ -22,7 +23,7 @@ import (
 )
 
 // Version is the tool version printed by --version and in the banner.
-const Version = "0.2.0"
+const Version = "0.2.1"
 
 func usage(argv0 string) {
 	fmt.Printf("monad-failover v%s — promote a synced Monad full node to validator\n", Version)
@@ -123,6 +124,24 @@ func run(args []string) int {
 	for _, problem := range hardening.Problems() {
 		c.Warn("Hardening: " + problem + "; continuing.")
 	}
+	for _, o := range p.Overrides {
+		c.Warn("Environment override in effect: " + o)
+	}
+
+	// An interrupt restores the terminal (hidden input turns echo off) and
+	// leaves the run to --resume; every step records its progress before it
+	// acts, so stopping at any point is safe.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigs
+		c.RestoreTerminal()
+		fmt.Fprintf(os.Stderr, "\n%s✗%s Interrupted (%s).\n   If a run was in progress, continue it with: %s --resume\n", ui.Red, ui.Reset, sig, argv0)
+		if sig == syscall.SIGTERM {
+			os.Exit(143)
+		}
+		os.Exit(130)
+	}()
 
 	if dryRun {
 		return promote.DryRun(c, p, opt.KeySourceDir, Version)

@@ -85,6 +85,20 @@ func TestOperatorOverridesAlwaysApply(t *testing.T) {
 		p.FoundationBase != "https://mirror.example/validator-data" || p.FoundationMaxAge.Seconds() != 3600 {
 		t.Errorf("overrides: %+v", p)
 	}
+	if got := strings.Join(p.Overrides, " "); got != "MONAD_HOME=/srv/monad BACKUP_ROOT=/srv/backup FOUNDATION_DATA_BASE=https://mirror.example/validator-data FOUNDATION_MAX_AGE=3600" {
+		t.Errorf("overrides not reported: %q", got)
+	}
+}
+
+func TestNoOverridesReportedByDefault(t *testing.T) {
+	clearEnv(t)
+	p, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Overrides) != 0 {
+		t.Errorf("overrides reported: %v", p.Overrides)
+	}
 }
 
 func TestBadDurationsAreRefused(t *testing.T) {

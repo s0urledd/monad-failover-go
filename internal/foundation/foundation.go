@@ -151,7 +151,7 @@ func Lookup(body []byte, fetchErr error, network, secp, bls string, maxAge time.
 
 	var hits []validator
 	for _, v := range snap.Validators {
-		if strings.EqualFold(v.Secp, secp) {
+		if normKey(v.Secp) == normKey(secp) {
 			hits = append(hits, v)
 		}
 	}

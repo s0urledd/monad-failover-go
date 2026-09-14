@@ -10,7 +10,7 @@ Use it for a planned migration or recovery when the old server is unavailable.
 It runs on the target full node using your validator key backups, with no
 connection to the old server required.
 
-0.2.0 is under validation on testnet. Do not use it on a mainnet validator
+0.2.1 is under validation on testnet. Do not use it on a mainnet validator
 before 1.0.
 
 ## How it works
@@ -55,8 +55,8 @@ On the target full node, as root. The checksum is verified before the
 binary is installed:
 
 ```bash
-curl -fsSLO https://github.com/s0urledd/monad-failover-go/releases/download/v0.2.0/monad-failover &&
-echo "7c555a5703691f4fce387122a5b06b306364f93672f56cdca557d1f7896fb427  monad-failover" | sha256sum -c - &&
+curl -fsSLO https://github.com/s0urledd/monad-failover-go/releases/download/v0.2.1/monad-failover &&
+echo "04b80d4c73ec91ce81f777ea6ce0ff3ad8bc11b24a29f37af31ce815236048b5  monad-failover" | sha256sum -c - &&
 install -m 755 monad-failover /usr/local/bin/monad-failover
 ```
 
@@ -64,7 +64,7 @@ To build it yourself instead, with Go 1.24.7. The build is reproducible, so
 the binary and checksum come out identical:
 
 ```bash
-git clone https://github.com/s0urledd/monad-failover-go && cd monad-failover-go && git checkout v0.2.0
+git clone https://github.com/s0urledd/monad-failover-go && cd monad-failover-go && git checkout v0.2.1
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o monad-failover ./cmd/monad-failover
 install -m 755 monad-failover /usr/local/bin/monad-failover
 ```

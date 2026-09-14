@@ -74,3 +74,16 @@ func TestTestOnlyOverrideIsRefused(t *testing.T) {
 		t.Errorf("exit %d output %q", code, out)
 	}
 }
+
+// An operator override in the environment is said before anything runs.
+func TestEnvironmentOverrideIsAnnounced(t *testing.T) {
+	t.Setenv("MF_ALLOW_NONROOT", "")
+	os.Unsetenv("MF_ALLOW_NONROOT")
+	t.Setenv("MF_STATE_DIR", "")
+	os.Unsetenv("MF_STATE_DIR")
+	t.Setenv("MONAD_HOME", t.TempDir())
+	out := capture(t, func() { run([]string{"monad-failover", "--dry-run"}) })
+	if !strings.Contains(out, "Environment override in effect: MONAD_HOME=") {
+		t.Errorf("override not announced:\n%s", out)
+	}
+}

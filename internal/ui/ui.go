@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode"
@@ -50,6 +51,11 @@ type Console struct {
 	in    *lineReader
 	inFd  int
 	isTTY bool
+
+	// restore puts the terminal back while echo is off, so an interrupt
+	// during hidden input does not leave the shell without echo.
+	mu      sync.Mutex
+	restore func()
 }
 
 // New wires a console to the given streams. stdin may be nil when no prompt
@@ -248,21 +254,34 @@ func (c *Console) AskRaw(label string) (string, error) {
 // returned as bytes so the caller can zero it after use.
 func (c *Console) AskHidden(label string) ([]byte, error) {
 	fmt.Fprintf(c.Out, "  %s?%s %s › ", Cyan, Reset, label)
-	restore := func() {}
 	if c.isTTY {
 		r, err := disableEcho(c.inFd)
 		if err != nil {
 			return nil, Die("Cannot disable terminal echo; use key backup files instead.")
 		}
-		restore = r
+		c.mu.Lock()
+		c.restore = r
+		c.mu.Unlock()
 	}
 	ans, err := c.readLineBytes()
-	restore()
+	c.RestoreTerminal()
 	fmt.Fprintln(c.Out)
 	if err != nil {
 		return nil, Die("Input ended while waiting for: " + label)
 	}
 	return ans, nil
+}
+
+// RestoreTerminal re-enables echo if a hidden prompt turned it off. Safe
+// to call from a signal handler and more than once.
+func (c *Console) RestoreTerminal() {
+	c.mu.Lock()
+	r := c.restore
+	c.restore = nil
+	c.mu.Unlock()
+	if r != nil {
+		r()
+	}
 }
 
 // ── terminal echo control (linux) ────────────────────────────────────

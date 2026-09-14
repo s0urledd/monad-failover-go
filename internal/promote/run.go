@@ -197,6 +197,7 @@ func (r *Run) Promote() error {
 			return err
 		default:
 			r.c.OK(fmt.Sprintf("Resuming from step %d", res.LastStep+1))
+			r.noteIgnoredFlags(res.LastStep)
 			r.network, r.newSeq = res.Network, res.NewSeq
 			r.secpPub, r.blsPub = res.SecpPub, res.BlsPub
 			r.ip, r.selfAddress, r.selfSig = res.IP, res.SelfAddress, res.SelfSig
@@ -223,6 +224,9 @@ func (r *Run) Promote() error {
 	if r.todo(1) {
 		r.c.Phase(1, PhasesTotal, "PREFLIGHT")
 		if err := r.checkSync(); err != nil {
+			return err
+		}
+		if err := r.checkUnits(); err != nil {
 			return err
 		}
 		if err := r.st.Set("last_step", "1"); err != nil {
@@ -289,6 +293,29 @@ func (r *Run) Promote() error {
 	return r.finish()
 }
 
+// noteIgnoredFlags says which command-line inputs a resume does not use
+// because the step that consumes them already ran. --public-ip is covered
+// by the plan, which names the address the record was signed for.
+func (r *Run) noteIgnoredFlags(last int) {
+	var ignored []string
+	if last >= 4 && r.opt.KeySourceDir != "" {
+		ignored = append(ignored, "--backup-dir")
+	}
+	if last >= 5 {
+		for _, f := range []struct{ flag, val string }{
+			{"--beneficiary", r.opt.Beneficiary}, {"--node-name", r.opt.NodeName}, {"--seq", r.opt.Seq},
+		} {
+			if f.val != "" {
+				ignored = append(ignored, f.flag)
+			}
+		}
+	}
+	if len(ignored) > 0 {
+		r.c.Warn(strings.Join(ignored, ", ") + " ignored: the step that uses them already ran.")
+		r.c.Println("  The plan shows the recorded values. Start fresh to change them.")
+	}
+}
+
 // todo reports whether phase n still has to run.
 func (r *Run) todo(n int) bool {
 	return !r.opt.Resume || !r.st.CompletedStep(n)
@@ -340,6 +367,18 @@ func (r *Run) detectNetwork() error {
 		r.network = ans
 		if r.network != "mainnet" && r.network != "testnet" {
 			return ui.Die("Invalid network")
+		}
+	}
+	// The Foundation config carries chain_id at the root; a value that
+	// disagrees with network_name means the config was edited by hand.
+	if chain, err := nodeconf.ReadValue(r.p.NodeToml, "chain_id", ""); err == nil {
+		want := "10143"
+		if r.network == "mainnet" {
+			want = "143"
+		}
+		if chain != want {
+			return ui.Die("node.toml says network_name "+r.network+" but chain_id "+chain+" (expected "+want+").",
+				"The config is inconsistent. Fix it before migrating.")
 		}
 	}
 	r.c.OK("Network: " + r.network)
@@ -839,6 +878,10 @@ func (r *Run) signRecord() error {
 			"Retry with: "+r.opt.Argv0+" --resume --public-ip <this-server-public-IPv4>")
 	}
 	r.c.OK("Public IP: " + r.ip + " (" + r.ipSource + ")")
+	if !netinfo.GlobalIPv4(r.ip) {
+		r.c.Warn(r.ip + " is not a public address (private, loopback or reserved range).")
+		r.c.Println("  Peers on the internet cannot reach the node there.")
+	}
 	if r.opt.PublicIP != "" && r.detectedIP != "" && r.detectedIP != r.ip {
 		r.c.Warn("--public-ip " + r.ip + " differs from the address this host reports: " + r.detectedIP)
 		r.c.Println("  The name record will carry " + r.ip + ". Peers must reach this node there.")

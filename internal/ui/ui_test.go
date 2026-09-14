@@ -84,3 +84,15 @@ func TestZero(t *testing.T) {
 		t.Error("not zeroed")
 	}
 }
+
+// Without a terminal there is nothing to restore; the call must still be
+// safe, including twice, since the signal handler may race a prompt.
+func TestRestoreTerminalWithoutTTY(t *testing.T) {
+	c, _, _ := console(t, "secret\n")
+	c.RestoreTerminal()
+	if s, err := c.AskHidden("x"); err != nil || string(s) != "secret" {
+		t.Errorf("AskHidden after restore: %q %v", s, err)
+	}
+	c.RestoreTerminal()
+	c.RestoreTerminal()
+}

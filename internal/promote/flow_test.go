@@ -14,6 +14,7 @@ import (
 	"github.com/s0urledd/monad-failover-go/internal/paths"
 	"github.com/s0urledd/monad-failover-go/internal/place"
 	"github.com/s0urledd/monad-failover-go/internal/state"
+	"github.com/s0urledd/monad-failover-go/internal/systemd"
 	"github.com/s0urledd/monad-failover-go/internal/testutil"
 	"github.com/s0urledd/monad-failover-go/internal/ui"
 )
@@ -81,7 +82,8 @@ func newHarness(t *testing.T) *harness {
 	t.Setenv("MOCK_LOG", h.log)
 	t.Setenv("PATH", filepath.Join(repoRoot(t), "tests", "mocks")+":"+os.Getenv("PATH"))
 	for _, k := range []string{"MOCK_PREMASKED", "MOCK_MASK_FAIL", "MOCK_FAIL_START", "MOCK_CRASH_AFTER_START",
-		"MOCK_STATUS", "MOCK_STATUS_AFTER", "MOCK_SEQ_OFFSET", "MOCK_UDP_PORT", "MOCK_SIGNER_OMIT", "MOCK_FAIL_RECOVER_PATH"} {
+		"MOCK_STATUS", "MOCK_STATUS_AFTER", "MOCK_SEQ_OFFSET", "MOCK_UDP_PORT", "MOCK_SIGNER_OMIT", "MOCK_FAIL_RECOVER_PATH",
+		"MOCK_UNIT_DIR", "MOCK_MISSING_UNIT", "MOCK_STOP_SLEEP", "MOCK_STOP_FAIL", "MOCK_QUERY_FAIL", "MOCK_STATUS_EXIT"} {
 		t.Setenv(k, "")
 		os.Unsetenv(k)
 	}
@@ -108,9 +110,9 @@ func (h *harness) healthyEnv() {
 	h.mock("monad-keystore", "import", "--ikm", strings.Repeat("9", 64), "--keystore-path", h.p.SecpKey, "--password", "testpass")
 	h.mock("monad-keystore", "import", "--ikm", strings.Repeat("8", 64), "--keystore-path", h.p.BlsKey, "--password", "testpass")
 	os.WriteFile(filepath.Join(h.p.BackupRoot, "secp-backup"),
-		[]byte("Secp public key: 0xSECPvalidator\nKeystore secret: "+testutil.SecpIKM+"\n"), 0o600)
+		[]byte("Secp public key: "+testutil.MockSecp+"\nKeystore secret: "+testutil.SecpIKM+"\n"), 0o600)
 	os.WriteFile(filepath.Join(h.p.BackupRoot, "bls-backup"),
-		[]byte("BLS public key: 0xBLSvalidator\nKeystore secret: "+testutil.BlsIKM+"\n"), 0o600)
+		[]byte("BLS public key: "+testutil.MockBls+"\nKeystore secret: "+testutil.BlsIKM+"\n"), 0o600)
 }
 
 func (h *harness) mock(name string, args ...string) {
@@ -1276,7 +1278,7 @@ func TestInvalidFlagValuesAreRefusedByTheRun(t *testing.T) {
 func TestKeysNotInSnapshotAreFlaggedInThePlan(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
-	h.ep.Snapshot = testutil.Snapshot(testutil.SnapshotOpts{Secp: "0xSECPother00000000000000000000000000000000000"})
+	h.ep.Snapshot = testutil.Snapshot(testutil.SnapshotOpts{Secp: testutil.OtherSecp})
 	code, out := h.run(normalStdin(beneficiary, nodeName, "3"), h.normalOpts())
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
@@ -1588,5 +1590,181 @@ func TestDryRunCountsConfigWarnings(t *testing.T) {
 	matches := re.FindStringSubmatch(out)
 	if len(matches) != 2 || matches[1] == "0" {
 		t.Fatalf("warning not counted: %s", out)
+	}
+}
+
+// ── 0.2.1: what the audit added ──
+
+// A unit file in /etc/systemd/system cannot be masked. Both the dry run and
+// the live preflight say so before anything is stopped.
+func TestUnitFileUnderEtcIsRefusedBeforeAnythingChanges(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	t.Setenv("MOCK_UNIT_DIR", "/etc/systemd/system")
+	code, out := h.dryRun(h.p.BackupRoot)
+	if code != 1 {
+		t.Fatalf("dry run exit %d:\n%s", code, out)
+	}
+	expect(t, out, "monad-bft: unit file is /etc/systemd/system/monad-bft.service; systemctl mask cannot override a unit in /etc/systemd/system",
+		"Move a unit file in /etc/systemd/system to /usr/local/lib/systemd/system/,", "Preflight failed")
+	code, out = h.normalRun()
+	if code != 1 {
+		t.Fatalf("live exit %d:\n%s", code, out)
+	}
+	expect(t, out, "The monad units cannot be masked; refusing to prepare a cutover.", "Nothing has been changed.")
+	reject(t, out, "BACKUP CURRENT CONFIG")
+	h.assertServicesUntouched()
+	if h.stateExists() {
+		t.Error("state written before the unit check passed")
+	}
+}
+
+func TestMissingUnitIsRefusedBeforeAnythingChanges(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	t.Setenv("MOCK_MISSING_UNIT", "monad-rpc")
+	code, out := h.normalRun()
+	if code != 1 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	expect(t, out, "monad-rpc: not found by systemd")
+	h.assertServicesUntouched()
+	if code, out := h.dryRun(h.p.BackupRoot); code != 1 || !strings.Contains(out, "monad-rpc: not found by systemd") {
+		t.Errorf("dry run exit %d:\n%s", code, out)
+	}
+}
+
+// A stop that outlives its deadline stops the run before any file is
+// swapped; the resume finishes once the units are down.
+func TestStopPastDeadlineNeverSwapsAndResumeFinishes(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	before := h.liveSHAs()
+	old := systemd.StopTimeout
+	systemd.StopTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { systemd.StopTimeout = old })
+	t.Setenv("MOCK_STOP_SLEEP", "3")
+	code, out := h.normalRun()
+	if code != 1 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	expect(t, out, "Could not stop all services; refusing to swap files.", "monad-failover --resume")
+	if h.liveSHAs() != before {
+		t.Error("files swapped after a failed stop")
+	}
+	if strings.Contains(h.mockLog(), "systemctl start") {
+		t.Error("services started")
+	}
+	os.Unsetenv("MOCK_STOP_SLEEP")
+	code, out = h.run(resumeStdin, Options{Resume: true, PublicIP: publicIP})
+	if code != 0 {
+		t.Fatalf("resume exit %d:\n%s", code, out)
+	}
+	expect(t, out, "Services stopped", "VALIDATOR PROMOTION COMPLETE")
+}
+
+func TestResumeSaysWhichFlagsItIgnores(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	if code, out := h.run(abortAtStopped(beneficiary, nodeName, "8"), h.normalOpts()); code != 1 {
+		t.Fatalf("setup exit %d:\n%s", code, out)
+	}
+	code, out := h.run(resumeStdin, Options{Resume: true, PublicIP: publicIP, KeySourceDir: h.p.BackupRoot,
+		Beneficiary: "0x1111111111111111111111111111111111111111", NodeName: "other", Seq: "99"})
+	if code != 0 {
+		t.Fatalf("resume exit %d:\n%s", code, out)
+	}
+	expect(t, out, "--backup-dir, --beneficiary, --node-name, --seq ignored: the step that uses them already ran.",
+		"beneficiary  "+beneficiary+" (entered)", "seq_num      8 (entered)", "VALIDATOR PROMOTION COMPLETE")
+	if !tomlIn(h.read(h.p.NodeToml), "", "beneficiary", `"`+beneficiary+`"`) {
+		t.Error("a resume applied an ignored flag")
+	}
+}
+
+func TestChainIDMustAgreeWithNetworkName(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	os.WriteFile(h.p.NodeToml, []byte("chain_id = 143\n"+h.read(h.p.NodeToml)), 0o644)
+	code, out := h.normalRun()
+	if code != 1 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	expect(t, out, "node.toml says network_name testnet but chain_id 143 (expected 10143).")
+	h.assertServicesUntouched()
+	h2 := newHarness(t)
+	h2.healthyEnv()
+	os.WriteFile(h2.p.NodeToml, []byte("chain_id = 10143\n"+h2.read(h2.p.NodeToml)), 0o644)
+	if code, out := h2.normalRun(); code != 0 {
+		t.Fatalf("consistent chain_id refused: exit %d:\n%s", code, out)
+	}
+}
+
+func TestNonPublicOverrideAddressIsWarnedAtSigningAndInThePlan(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	code, out := h.run(normalStdin(beneficiary, nodeName, "8"), Options{KeySourceDir: h.p.BackupRoot, PublicIP: "10.0.0.5"})
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	expect(t, out, "10.0.0.5 is not a public address (private, loopback or reserved range).",
+		"10.0.0.5 is not a public address. Peers on the internet cannot reach the node there.", "VALIDATOR PROMOTION COMPLETE")
+	h3 := newHarness(t)
+	h3.healthyEnv()
+	if _, out := h3.normalRun(); strings.Contains(out, "is not a public address") {
+		t.Error("a public address was warned about")
+	}
+}
+
+// The Foundation's published node.toml, as a full node would run it: the
+// migration edits only its own lines and leaves the rest of the structure
+// (bootstrap peer tables, sub-tables) as published.
+func TestFoundationReferenceConfigsMigrateIntact(t *testing.T) {
+	for _, net := range []string{"testnet", "mainnet"} {
+		h := newHarness(t)
+		h.healthyEnv()
+		ref, err := os.ReadFile(filepath.Join(repoRoot(t), "tests", "fixtures", "foundation-"+net+".node.toml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		os.WriteFile(h.p.NodeToml, ref, 0o644)
+		h.ep.Snapshot = testutil.Snapshot(testutil.SnapshotOpts{Network: net})
+		code, out := h.normalRun()
+		if code != 0 {
+			t.Fatalf("%s: exit %d:\n%s", net, code, out)
+		}
+		expect(t, out, "Network: "+net, "    0x<VALIDATOR_REWARDS_ADDRESS>", "    <NODE_NAME>", "VALIDATOR PROMOTION COMPLETE")
+		got := h.read(h.p.NodeToml)
+		want := string(ref)
+		if strings.Count(got, "[[bootstrap.peers]]") != strings.Count(want, "[[bootstrap.peers]]") ||
+			!strings.Contains(got, "[fullnode_raptorcast.full_nodes_prioritized]") || !strings.Contains(got, "bind_address_host") {
+			t.Errorf("%s: structure changed:\n%s", net, got)
+		}
+		for _, c := range []struct{ table, key, value string }{
+			{"", "beneficiary", `"` + beneficiary + `"`}, {"", "node_name", `"` + nodeName + `"`},
+			{"peer_discovery", "self_address", `"` + publicIP + `:8000"`}, {"peer_discovery", "self_record_seq_num", "8"},
+			{"fullnode_raptorcast", "enable_publisher", "true"}, {"statesync", "expand_to_group", "true"},
+		} {
+			if !tomlIn(got, c.table, c.key, c.value) {
+				t.Errorf("%s: lacks %s.%s = %s", net, c.table, c.key, c.value)
+			}
+		}
+		// every line the tool did not need to touch is unchanged: same line
+		// count, and a differing line always carries one of the keys the
+		// migration sets.
+		wantLines, gotLines := strings.Split(want, "\n"), strings.Split(got, "\n")
+		if len(wantLines) != len(gotLines) {
+			t.Fatalf("%s: line count %d -> %d", net, len(wantLines), len(gotLines))
+		}
+		allowed := map[string]bool{"beneficiary": true, "node_name": true, "self_address": true, "self_auth_port": true,
+			"self_record_seq_num": true, "self_name_record_sig": true, "enable_publisher": true, "enable_client": true, "expand_to_group": true}
+		for i := range wantLines {
+			if wantLines[i] == gotLines[i] {
+				continue
+			}
+			key, _, _ := strings.Cut(gotLines[i], " =")
+			if !allowed[key] {
+				t.Errorf("%s: unexpected change at line %d:\n  %s\n  %s", net, i+1, wantLines[i], gotLines[i])
+			}
+		}
 	}
 }

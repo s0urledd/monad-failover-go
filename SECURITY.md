@@ -173,6 +173,10 @@ every point it can be interrupted is recoverable:
 - Once a cutover has begun that fact is recorded, and a later run without
   `--resume` refuses to start fresh over an unfinished swap.
 
+An interrupt (Ctrl-C or SIGTERM) restores the terminal, prints the resume
+command and exits. Nothing is undone: every step records its progress before
+it acts, so the run continues from that record with `--resume`.
+
 `--resume` reads the recorded stage and continues from it: before the mask,
 between renames, after the swap but before the services start, and during final
 verification.

@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.2.1 — 2026-09-14
+
+Fixes from a pre-testnet audit. The cutover sequence is unchanged.
+
+- Preflight and the dry run check that systemd knows the three units and
+  that their unit files can be masked. A unit file under
+  `/etc/systemd/system`, which `systemctl mask` cannot override, is refused
+  before anything is stopped instead of at cutover with the old validator
+  already down.
+- `systemctl stop` has its own 15-minute deadline; execution can take
+  minutes to flush on shutdown. A stop that still outlives it leaves the
+  run resumable with nothing swapped.
+- Ctrl-C and SIGTERM restore the terminal (hidden input turns echo off) and
+  print the resume hint. Every step records its progress before it acts, so
+  an interrupt anywhere is safe.
+- A resume names the command-line inputs it does not use because their step
+  already ran.
+- `chain_id` in node.toml must agree with `network_name` (10143 for
+  testnet, 143 for mainnet); a config edited by hand is refused.
+- A `--public-ip` in a private, loopback or reserved range is warned about
+  at signing and in the plan.
+- Operator environment overrides in effect (`MONAD_HOME`, `BACKUP_ROOT`,
+  `LOG_DIR`, `FOUNDATION_DATA_BASE` and the timing variables) are announced
+  at start.
+- The snapshot lookup compares the SECP key the same way as the BLS key,
+  ignoring case and a `0x` prefix.
+- Test doubles answer in the real tools' shapes: 66-hex SECP and 96-hex BLS
+  keys without a prefix, and `systemctl show` honours the property asked
+  for. The Foundation's published mainnet and testnet node.toml are
+  fixtures; the migration runs over both and must leave every line it does
+  not own unchanged.
+
 ## 0.2.0 — 2026-09-14
 
 Plan and apply. The per-step questions are gone; one plan is shown and

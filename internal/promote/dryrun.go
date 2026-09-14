@@ -104,6 +104,22 @@ func DryRun(c *ui.Console, p paths.Paths, keySourceDir, version string) int {
 		warns++
 	}
 
+	c.Step("SYSTEMD UNITS")
+	if problems, err := unitProblems(); err != nil {
+		c.Cross("cannot query the monad units: " + err.Error())
+		fails++
+	} else if len(problems) > 0 {
+		for _, p := range problems {
+			c.Cross(p)
+		}
+		for _, l := range unitAdvice {
+			c.Println("  " + l)
+		}
+		fails++
+	} else {
+		c.OK("monad-bft, monad-execution, monad-rpc found; unit files can be masked")
+	}
+
 	warns += checkRPC(c)
 
 	c.Step("KEY BACKUP FILES")

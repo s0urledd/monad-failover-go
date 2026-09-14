@@ -14,10 +14,15 @@ import (
 // MockSecp and MockBls are the public keys the mock monad-keystore reports
 // for the test suite's validator IKMs.
 const (
-	MockSecp = "0xSECP1111111111111111111111111111111111111111"
-	MockBls  = "0xBLS2222222222222222222222222222222222222222"
-	SecpIKM  = "1111111111111111111111111111111111111111111111111111111111111111"
-	BlsIKM   = "2222222222222222222222222222222222222222222222222222222222222222"
+	SecpIKM = "1111111111111111111111111111111111111111111111111111111111111111"
+	BlsIKM  = "2222222222222222222222222222222222222222222222222222222222222222"
+	// the mock keystore swaps each IKM digit (1 -> e, 2 -> d)
+	MockSecp = "02eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	MockBls  = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+
+	// OtherSecp and OtherBls belong to a different validator.
+	OtherSecp = "03ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	OtherBls  = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 )
 
 // SnapshotOpts select which guard a snapshot should trip.
@@ -67,7 +72,7 @@ func Snapshot(o SnapshotOpts) string {
 		bls = MockBls
 	}
 	if o.BadBLS {
-		bls = "0xBLSdifferentkey0000000000000000000000000000"
+		bls = OtherBls
 	}
 	if o.NoBLS {
 		bls = ""
@@ -82,13 +87,13 @@ func Snapshot(o SnapshotOpts) string {
 	} else {
 		entry = fmt.Sprintf(`{"id": 1, "name": "MockVal", "secp": "%s", "bls": "%s"%s}`, secp, bls, peer)
 	}
-	other := `{"id": 2, "name": "Other", "secp": "0xSECPffffffffffffffffffffffffffffffffffffff", "bls": "0xBLSf", "peer": {"record_seq_num": 3}}`
+	other := `{"id": 2, "name": "Other", "secp": "` + OtherSecp + `", "bls": "` + OtherBls + `", "peer": {"record_seq_num": 3}}`
 	body := entry + ", " + other
 	if o.Dup {
 		body = entry + ", " + entry
 	}
 	if o.Truncate {
-		return fmt.Sprintf(`{"chain_id": "%s", "count": 2, "expected_version": "0.16.1", "fetched_at_epoch": %d, "network": "%s", "validators": [%s, {"id": 3, "secp": "0xcut`,
+		return fmt.Sprintf(`{"chain_id": "%s", "count": 2, "expected_version": "0.16.1", "fetched_at_epoch": %d, "network": "%s", "validators": [%s, {"id": 3, "secp": "02cut`,
 			chain, epoch, net, entry)
 	}
 	return fmt.Sprintf(`{"chain_id": "%s", "count": 2, "expected_version": "0.16.1", "fetched_at_epoch": %d, "network": "%s", "validators": [%s]}`,

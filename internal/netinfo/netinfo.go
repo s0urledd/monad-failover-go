@@ -31,6 +31,18 @@ func ValidIPv4(s string) bool {
 	return true
 }
 
+// GlobalIPv4 reports whether s is a valid IPv4 address that peers on the
+// public internet could reach: not loopback, private, link-local,
+// multicast, reserved or unspecified. Detection never yields such an
+// address; the check is for a value given by hand.
+func GlobalIPv4(s string) bool {
+	if !ValidIPv4(s) {
+		return false
+	}
+	ip := net.ParseIP(s)
+	return ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate()
+}
+
 var portRe = regexp.MustCompile(`^[0-9]{1,5}$`)
 
 // ValidPort reports whether s is a decimal port in 1..65535.

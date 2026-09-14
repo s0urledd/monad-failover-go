@@ -25,7 +25,23 @@ _premask_seed
 
 case "${1:-}" in
   show)
+    # show --property=NAME --value UNIT. FragmentPath answers with the unit
+    # file location: MOCK_UNIT_DIR overrides the /lib default, and a unit
+    # named in MOCK_MISSING_UNIT is not found (empty, exit 0, like systemd).
     [[ -n "${MOCK_QUERY_FAIL:-}" ]] && exit 1
+    prop="" unit=""
+    for a in "${@:2}"; do
+      case "$a" in
+        --property=*) prop="${a#--property=}" ;;
+        --*) ;;
+        *) unit="$a" ;;
+      esac
+    done
+    if [[ "$prop" == "FragmentPath" ]]; then
+      [[ " ${MOCK_MISSING_UNIT:-} " == *" $unit "* ]] && { echo; exit 0; }
+      echo "${MOCK_UNIT_DIR:-/lib/systemd/system}/$unit.service"
+      exit 0
+    fi
     [[ -f "$MARKER" ]] && echo active || echo inactive
     exit 0 ;;
   mask)
@@ -57,6 +73,8 @@ case "${1:-}" in
     ;;&
   stop)
     [[ -n "${MOCK_STOP_FAIL:-}" ]] && exit 1
+    # MOCK_STOP_SLEEP delays the stop, for the deadline test.
+    [[ -n "${MOCK_STOP_SLEEP:-}" ]] && sleep "$MOCK_STOP_SLEEP"
     rm -f "$MARKER"
     exit 0 ;;
   start)

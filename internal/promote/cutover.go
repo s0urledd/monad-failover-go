@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/s0urledd/monad-failover-go/internal/monad"
+	"github.com/s0urledd/monad-failover-go/internal/netinfo"
 	"github.com/s0urledd/monad-failover-go/internal/nodeconf"
 	"github.com/s0urledd/monad-failover-go/internal/place"
 	"github.com/s0urledd/monad-failover-go/internal/rpcports"
@@ -102,6 +103,9 @@ func (r *Run) showPlan() {
 	}
 	if r.ipSource == "flag" && r.detectedIP != "" && r.detectedIP != r.ip {
 		r.c.Warn("--public-ip differs from the address this host reports. Peers must reach this node at " + r.ip + ".")
+	}
+	if !netinfo.GlobalIPv4(r.ip) {
+		r.c.Warn(r.ip + " is not a public address. Peers on the internet cannot reach the node there.")
 	}
 	if r.opt.PublicIP != "" && r.opt.PublicIP != r.ip {
 		r.c.Warn("--public-ip " + r.opt.PublicIP + " is ignored: the name record was already signed for " + r.ip + ".")

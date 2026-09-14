@@ -41,6 +41,10 @@ type Paths struct {
 
 	HealthWait time.Duration
 	SyncWait   time.Duration
+
+	// Overrides lists the operator environment variables that changed a
+	// default, as KEY=value, so a run says so before acting on them.
+	Overrides []string
 }
 
 const (
@@ -112,6 +116,11 @@ func FromEnv() (Paths, error) {
 					"In a live (root) run this value is fixed so it cannot be redirected",
 					"to a location or endpoint an unprivileged user controls.")
 			}
+		}
+	}
+	for _, k := range []string{"MONAD_HOME", "BACKUP_ROOT", "LOG_DIR", "FOUNDATION_DATA_BASE", "FOUNDATION_MAX_AGE", "MF_HEALTH_WAIT", "MF_SYNC_WAIT"} {
+		if v := os.Getenv(k); v != "" {
+			p.Overrides = append(p.Overrides, k+"="+v)
 		}
 	}
 	p.StateDirOverride = testOnly["MF_STATE_DIR"]
