@@ -74,19 +74,20 @@ The binary is static. It calls `systemctl`, `monad-keystore`,
 
 ## Run
 
-Point it at the directory holding your validator's `secp-backup` and `bls-backup`:
-
 ```bash
-monad-failover --dry-run --backup-dir /path/to/validator-backups   # checks only, changes nothing
-monad-failover --backup-dir /path/to/validator-backups             # the migration
+# Check the node and the backup files. Nothing is changed.
+monad-failover --dry-run --backup-dir /path/to/validator-backups
+
+# Migrate. Asks for the beneficiary, node name and sequence number, shows
+# the plan, and changes nothing until you confirm it and type STOPPED.
+monad-failover --backup-dir /path/to/validator-backups
 ```
 
-The run asks for the beneficiary, node name and sequence number, shows the
-plan, and changes nothing until you confirm it and type `STOPPED`. The same
-values can be given as flags:
+The answers can be given up front. The plan and `STOPPED` are still asked:
 
 ```bash
-monad-failover --backup-dir /path/to/validator-backups --beneficiary 0xADDRESS --node-name NAME --seq N
+monad-failover --backup-dir /path/to/validator-backups \
+  --beneficiary 0xADDRESS --node-name NAME --seq N
 ```
 
 | Flag | Effect |
