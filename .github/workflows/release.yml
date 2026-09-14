@@ -57,7 +57,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           pre=""
-          case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
+          # 0.x and suffixed tags are not for mainnet use yet.
+          case "$GITHUB_REF_NAME" in *-*|v0.*) pre="--prerelease" ;; esac
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" monad-failover checksums.txt --clobber
             gh release edit "$GITHUB_REF_NAME" --notes-file notes.md $pre

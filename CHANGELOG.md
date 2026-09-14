@@ -1,8 +1,8 @@
 # Changelog
 
-## 2.0.0-rc.1 — 2026-09-14
+## 0.1.0 — 2026-09-14
 
-First release candidate.
+First release.
 
 - Single static linux/amd64 binary built from the Go standard library only.
   The build is reproducible; the README carries the release checksum and CI
