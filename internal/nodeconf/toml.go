@@ -1,6 +1,7 @@
 package nodeconf
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -166,11 +167,21 @@ func ReadValue(file, key, section string) (string, error) {
 			}
 		}
 	}
-	if count != 1 {
-		return "", fmt.Errorf("expected one %s in [%s], found %d", key, section, count)
+	switch count {
+	case 0:
+		return "", ErrMissing
+	case 1:
+		return value, nil
+	default:
+		return "", fmt.Errorf("%w: %s appears %d times in [%s]", ErrAmbiguous, key, count, section)
 	}
-	return value, nil
 }
+
+// Sentinel results of ReadValue.
+var (
+	ErrMissing   = errors.New("key not present")
+	ErrAmbiguous = errors.New("key not unique")
+)
 
 func TomlGet(file, key string) string {
 	if key == "beneficiary" || key == "node_name" {

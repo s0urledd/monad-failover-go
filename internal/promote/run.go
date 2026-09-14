@@ -529,12 +529,16 @@ func (r *Run) configure() error {
 	}
 
 	r.c.Blank()
+	// The value already in the config is shown and, if kept, validated. An
+	// absent value is not an error here: the operator can type one. A key
+	// that appears more than once is: the staged edit could not be unique.
 	cur, readErr := nodeconf.ReadValue(r.d.TomlNew, "beneficiary", "")
-	if readErr != nil {
-		return ui.Die("Cannot read an unambiguous beneficiary from node.toml.")
-	}
-	if !nodeconf.BeneficiaryRe.MatchString(cur) {
-		return ui.Die("Existing beneficiary must be a 0x-prefixed 40-hex-character address")
+	switch {
+	case errors.Is(readErr, nodeconf.ErrMissing):
+		cur = ""
+	case readErr != nil:
+		return ui.Die("Cannot read an unambiguous beneficiary from node.toml.",
+			"It appears more than once or is not a plain string. Fix the config and re-run.")
 	}
 	r.c.Println(ui.Bold + "BENEFICIARY" + ui.Reset)
 	r.c.Println("Enter the beneficiary address from the old validator's node.toml.")
@@ -565,6 +569,10 @@ func (r *Run) configure() error {
 		// get a yes for it. Rewards go to this address.
 		if cur == "" {
 			return ui.Die("No beneficiary given and none set in the config.",
+				"Re-run and enter the validator's beneficiary address.")
+		}
+		if !nodeconf.BeneficiaryRe.MatchString(cur) {
+			return ui.Die("The beneficiary already in the config is not a 0x-prefixed 40-hex-character address.",
 				"Re-run and enter the validator's beneficiary address.")
 		}
 		if nodeconf.ZeroAddressRe.MatchString(cur) {

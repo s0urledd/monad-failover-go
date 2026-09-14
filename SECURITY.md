@@ -59,21 +59,28 @@ The keystore password and the IKM pass through this process. What the tool
 does about that inside its own memory:
 
 - Both are held as byte buffers and are turned into strings only for the
-  instant a child process's argument vector is built. The explicit byte buffers managed by this code are zeroed after use: the `.env` contents, the
-  backup file contents, a typed IKM, the parsed values, and the output of
+  instant a child process's argument vector is built. The byte buffers this
+  code manages are zeroed after use: the `.env` contents, the backup file
+  contents, a typed IKM, the parsed values, and the output of
   `monad-keystore recover`, which carries the secret alongside the public
-  key. The password byte buffer is zeroed when the run ends. Temporary strings and buffered terminal input may retain additional copies.
+  key. Terminal input is read through one fixed buffer this code owns, and a
+  consumed line is zeroed out of it at once. The password buffer is zeroed
+  when the run ends.
 - After every command that carried a secret on its argument vector, the
   garbage collector runs and free memory is returned to the kernel.
-- Core dumps are disabled and the process dumpable flag is cleared on a best-effort basis. Memory locking is attempted as root; platform limits or missing capabilities can prevent it.
+- Core dumps are disabled and the process is made non-dumpable; as root,
+  memory locking is attempted so nothing pages out to swap. Each of these is
+  best effort: a failure is printed before the run starts and the run
+  continues.
 
 What it cannot do: the copy Go makes of each argument for `execve` belongs to
 the runtime. It is collected, not zeroed, and can stay in a reused page until
 something overwrites it. A memory image of the process taken while a key
 command runs, or shortly after, can contain the values. Anyone able to take
 such an image is root, and root already holds the password in `.env` and the
-IKM in the backup files; these best-effort measures reduce exposure through core dumps and swap; they are not an unconditional guarantee. A VM
-snapshot is outside their reach.
+IKM in the backup files; the measures above reduce exposure through core
+dumps and swap and are not an unconditional guarantee. A VM snapshot is
+outside their reach.
 
 ## Resume state is a root trust boundary
 
@@ -220,13 +227,18 @@ key-handling issues are treated as top priority.
 
 ## Backup and metadata boundaries
 
-Backup and log directories are checked for symlinks, foreign ownership and
-writable ancestors before secret files are created. Existing trusted directories
-are restricted to 0700. A root-owned sticky temporary directory is permitted as
-an ancestor of an owned private test directory, not as the backup directory itself.
-Exports use unique O_EXCL temporary files and rename; a pre-existing predictable
-.partial path is never opened. Prior backups are kept under unique .bak names.
+Before a secret file is created, the backup and log directories are checked:
+no symlink at any step of the path, every directory owned by root (or by the
+user running the tool), and no ancestor writable by group or others. A
+root-owned sticky directory such as `/tmp` is accepted as an ancestor, never
+as the directory itself. A directory that passes is set to `0700`. Key
+exports are written through uniquely named `O_EXCL` temporary files and
+renamed into place; no predictable temporary path is ever opened. Earlier
+exports are kept under unique `.bak` names, never overwritten.
 
-Preparation does not change the live config directory, .env or key permissions.
-Placement sets and checks the three destination files' ownership and 0600 mode
-before services are unmasked; the surrounding config directory retains its owner.
+Preparation changes nothing about the live config directory, `.env` or the
+key files, not even ownership or mode. Placement sets the three destination
+files to the monad account and mode `0600` through the open file descriptor
+before the rename, and the same ownership and mode are checked again before
+the services are unmasked, on resume as well. The surrounding config
+directory keeps whatever owner it had.

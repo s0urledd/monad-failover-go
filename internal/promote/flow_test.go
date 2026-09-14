@@ -49,6 +49,11 @@ func repoRoot(t *testing.T) string {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	root := t.TempDir()
+	// t.TempDir honours the umask; the directory checks refuse a
+	// group-writable ancestor, so pin it down.
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	h := &harness{t: t, root: root}
 	home := filepath.Join(root, "home", "monad")
 	h.p = paths.Paths{
@@ -939,7 +944,7 @@ func TestDuplicateRootKeyIsRejectedBeforeCutover(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
-	expect(t, out, "Cannot uniquely set")
+	expect(t, out, "Cannot read an unambiguous beneficiary")
 	h.assertServicesUntouched()
 }
 
@@ -960,13 +965,13 @@ func TestBlankBeneficiaryShowsKeptValueAndAsks(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
 	os.WriteFile(h.p.NodeToml, []byte(strings.Replace(h.read(h.p.NodeToml),
-		"0x0000000000000000000000000000000000000000", "0xC0FFEE00000000000000000000000000000C0FFEE", 1)), 0o644)
+		"0x0000000000000000000000000000000000000000", "0xC0FFEE0000000000000000000000000000C0FFEE", 1)), 0o644)
 	// blank, then decline
 	code, out := h.run("y\ny\n\nn\n", h.normalOpts())
 	if code != 1 {
 		t.Fatalf("decline exit %d:\n%s", code, out)
 	}
-	expect(t, out, "Keeping: 0xC0FFEE00000000000000000000000000000C0FFEE", "Aborted — re-run and enter the beneficiary address you want.")
+	expect(t, out, "Keeping: 0xC0FFEE0000000000000000000000000000C0FFEE", "Aborted — re-run and enter the beneficiary address you want.")
 	h.assertServicesUntouched()
 	// blank, then accept (the declined run left state at step 4; start clean)
 	h.d.Store().Clear()
@@ -974,7 +979,7 @@ func TestBlankBeneficiaryShowsKeptValueAndAsks(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("accept exit %d:\n%s", code, out)
 	}
-	expect(t, out, "Beneficiary kept: 0xC0FFEE00000000000000000000000000000C0FFEE", "VALIDATOR PROMOTION COMPLETE")
+	expect(t, out, "Beneficiary kept: 0xC0FFEE0000000000000000000000000000C0FFEE", "VALIDATOR PROMOTION COMPLETE")
 }
 
 func TestExplicitZeroBeneficiaryWarns(t *testing.T) {

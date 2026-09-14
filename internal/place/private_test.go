@@ -8,6 +8,7 @@ import (
 
 func TestPrivateDirRejectsLinksAndWritableParents(t *testing.T) {
 	root := t.TempDir()
+	os.Chmod(root, 0o700)
 	target := filepath.Join(root, "target")
 	os.Mkdir(target, 0700)
 	link := filepath.Join(root, "link")

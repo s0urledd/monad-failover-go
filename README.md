@@ -51,7 +51,7 @@ Run as root on the target full node:
 
 ```bash
 curl -fsSLO https://github.com/s0urledd/monad-failover-go/releases/download/v0.1.1/monad-failover &&
-echo "1374f035ef1f13ae704f7b1205ac73826633ed027d1a937ad46006fbbdef2103  monad-failover" | sha256sum -c - &&
+echo "7fd024fd4f176a6a1a342823b3c0f81174715dad21c67f47187e70132abbfd67  monad-failover" | sha256sum -c - &&
 install -m 755 monad-failover /usr/local/bin/monad-failover
 ```
 

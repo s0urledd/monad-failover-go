@@ -5,7 +5,7 @@
 package ui
 
 import (
-	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -46,7 +46,7 @@ type Console struct {
 	Out io.Writer
 	Err io.Writer
 
-	in    *bufio.Reader
+	in    *lineReader
 	inFd  int
 	isTTY bool
 }
@@ -56,11 +56,64 @@ type Console struct {
 func New(stdout, stderr io.Writer, stdin *os.File) *Console {
 	c := &Console{Out: stdout, Err: stderr, inFd: -1}
 	if stdin != nil {
-		c.in = bufio.NewReader(stdin)
+		c.in = newLineReader(stdin)
 		c.inFd = int(stdin.Fd())
 		c.isTTY = isTerminal(c.inFd)
 	}
 	return c
+}
+
+// lineReader reads stdin line by line through one fixed buffer this code
+// owns. A consumed line is zeroed out of that buffer as soon as it has been
+// handed to the caller, so a typed secret does not linger in read-ahead. The
+// buffer never grows, so no discarded copy is left for the collector.
+type lineReader struct {
+	f   *os.File
+	buf []byte
+	eof bool
+}
+
+const maxLine = 64 * 1024
+
+func newLineReader(f *os.File) *lineReader {
+	return &lineReader{f: f, buf: make([]byte, 0, maxLine)}
+}
+
+// readLine returns the next line without its terminator, as a fresh slice
+// the caller owns. io.EOF when nothing is left.
+func (l *lineReader) readLine() ([]byte, error) {
+	for {
+		if i := bytes.IndexByte(l.buf, '\n'); i >= 0 {
+			line := make([]byte, i)
+			copy(line, l.buf[:i])
+			l.consume(i + 1)
+			return bytes.TrimSuffix(line, []byte("\r")), nil
+		}
+		if l.eof {
+			if len(l.buf) == 0 {
+				return nil, io.EOF
+			}
+			line := make([]byte, len(l.buf))
+			copy(line, l.buf)
+			l.consume(len(l.buf))
+			return bytes.TrimSuffix(line, []byte("\r")), nil
+		}
+		if len(l.buf) == cap(l.buf) {
+			return nil, errors.New("input line too long")
+		}
+		n, err := l.f.Read(l.buf[len(l.buf):cap(l.buf)])
+		l.buf = l.buf[:len(l.buf)+n]
+		if err != nil {
+			l.eof = true
+		}
+	}
+}
+
+// consume drops the first n bytes, zeroing what they held.
+func (l *lineReader) consume(n int) {
+	rest := copy(l.buf, l.buf[n:])
+	Zero(l.buf[rest:len(l.buf)])
+	l.buf = l.buf[:rest]
 }
 
 // Tee adds w as a second destination for both streams. Used once the run log
@@ -131,18 +184,23 @@ func (c *Console) Report(err error) {
 // ErrNoInput is returned when a prompt hits end of input.
 var ErrNoInput = errors.New("no input available for prompt")
 
-func (c *Console) readLine() (string, error) {
+func (c *Console) readLineBytes() ([]byte, error) {
 	if c.in == nil {
-		return "", ErrNoInput
+		return nil, ErrNoInput
 	}
-	line, err := c.in.ReadString('\n')
+	line, err := c.in.readLine()
 	if err != nil {
-		if err == io.EOF && line != "" {
-			return strings.TrimRight(line, "\r\n"), nil
-		}
-		return "", ErrNoInput
+		return nil, ErrNoInput
 	}
-	return strings.TrimRight(line, "\r\n"), nil
+	return line, nil
+}
+
+func (c *Console) readLine() (string, error) {
+	b, err := c.readLineBytes()
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 // ConfirmYN prints "  ? prompt (y/N) › " and returns true for y/yes.
@@ -197,13 +255,13 @@ func (c *Console) AskHidden(label string) ([]byte, error) {
 		}
 		restore = r
 	}
-	ans, err := c.readLine()
+	ans, err := c.readLineBytes()
 	restore()
 	fmt.Fprintln(c.Out)
 	if err != nil {
 		return nil, Die("Input ended while waiting for: " + label)
 	}
-	return []byte(ans), nil
+	return ans, nil
 }
 
 // ── terminal echo control (linux) ────────────────────────────────────

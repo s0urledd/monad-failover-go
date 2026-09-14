@@ -2,15 +2,31 @@
 
 ## 0.1.1 — 2026-09-14
 
-Testnet preparation fixes.
+Fixes from a code review before testnet validation. No new prompts or flags.
 
-- Refuse cutover when service stop or state queries fail.
-- Reject failed sync commands and bound post-cutover sync queries by a deadline.
-- Write backups through unique private temporary files; refuse unsafe backup/log directories.
-- Keep live ownership and permissions unchanged during preparation; verify ownership on placed files.
-- Read beneficiary comments and quoted values correctly; validate signer fields and config readback.
-- Preserve prior exports with unique backup names; sync parent directories after placement/state renames.
-- Add regression tests, including root ownership checks.
+- A failed `systemctl stop` or a failed state query stops the run before any
+  file is swapped; an unknown service state is never read as stopped.
+- `monad-status` that exits non-zero is not evidence of sync, whatever it
+  printed; subprocess calls carry deadlines and the post-cutover sync window
+  is measured in real time.
+- Key backups are written through uniquely named private temporary files
+  with fsync and rename; backup and log directories are refused when they
+  are symlinks, foreign-owned or reachable through a writable ancestor.
+  Earlier exports are kept under unique `.bak` names.
+- Preparation no longer touches the ownership or mode of the live config
+  directory, `.env` or key files. Placement sets and checks ownership and
+  mode on the three placed files, and checks them again before unmasking.
+- Config values are read with TOML quoting and comment rules and must be
+  unique in their table; a kept beneficiary is validated as an address before
+  it is recorded. The operator can still type a beneficiary when the config
+  has none.
+- Signer output must carry the requested address and ports, a 130-hex-digit
+  signature and a sequence within range, once each; the staged config is
+  read back and compared before "patched and verified".
+- Terminal input goes through a fixed buffer this code owns; consumed lines
+  are zeroed from it. Hardening measures that did not apply are printed at
+  start instead of being silently ignored.
+- Regression tests for each item, including root-only ownership checks.
 
 
 ## 0.1.0 — 2026-09-14

@@ -7,7 +7,10 @@ import (
 )
 
 func TestApply(t *testing.T) {
-	Apply(os.Geteuid())
+	rep := Apply(os.Geteuid())
+	if rep.CoreLimit != nil || rep.Dumpable != nil {
+		t.Errorf("report: %+v", rep)
+	}
 	var lim syscall.Rlimit
 	if err := syscall.Getrlimit(syscall.RLIMIT_CORE, &lim); err != nil {
 		t.Fatal(err)

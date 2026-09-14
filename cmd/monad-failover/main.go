@@ -47,8 +47,9 @@ func run(args []string) int {
 	// not even for the instant between open() and chmod.
 	syscall.Umask(0o077)
 	// No core dump, not dumpable, and as root no paging out: a secret this
-	// process holds cannot leave it through those routes.
-	harden.Apply(os.Geteuid())
+	// process holds should not leave it through those routes. Each measure
+	// is best effort; what did not apply is said before the run starts.
+	hardening := harden.Apply(os.Geteuid())
 
 	c := ui.New(os.Stdout, os.Stderr, os.Stdin)
 	argv0 := args[0]
@@ -92,6 +93,9 @@ func run(args []string) int {
 	p, err := paths.FromEnv()
 	if err != nil {
 		return fail(err)
+	}
+	for _, problem := range hardening.Problems() {
+		c.Warn("Hardening: " + problem + "; continuing.")
 	}
 
 	if dryRun {
