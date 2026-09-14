@@ -10,18 +10,22 @@ Use it for a planned migration or recovery when the old server is unavailable.
 It runs on the target full node using your validator key backups, with no
 connection to the old server required.
 
-0.1.1 is under validation on testnet. Do not use it on a mainnet validator
+0.2.0 is under validation on testnet. Do not use it on a mainnet validator
 before 1.0.
 
 ## How it works
 
 1. With your synced full node and validator backups ready, the tool backs up
    the target's identity and imports the validator keys into protected staging.
-   You confirm the public keys, beneficiary and sequence number, then the tool
-   signs the name record and checks the staged config. The full node keeps running.
-2. Preparation and signing are complete before the switch. Review the summary,
-   stop the old validator (or ensure it is offline), and type `STOPPED`.
-   When you are ready, confirm `proceed with cutover?` to start the switch.
+   It takes the beneficiary, node name and sequence number from flags or
+   prompts, signs the name record and checks the staged config. The full node
+   keeps running.
+2. Preparation and signing are complete before the switch. The tool shows the
+   plan: host, public IP, both public keys, what the Foundation snapshot knows
+   about them, sequence, beneficiary and node name, each with where it came
+   from. Confirm the plan, stop the old validator (or ensure it is offline),
+   and type `STOPPED`. Rejecting the plan removes the staged files and the run
+   state; nothing on the node has changed.
 3. The tool rechecks the prepared files, masks and stops the target services,
    places the validator keys and config, verifies the placed files, and starts
    the services. It then checks service health and sync and exports fresh key
@@ -36,9 +40,9 @@ before 1.0.
   Place them in a private directory of your choice on the target
   (directory `700`, files `600`). These are unencrypted secrets; keep off-server
   copies. Hidden manual IKM entry is also available.
-- The validator's SECP and BLS public keys to compare at the confirmation prompt.
+- The validator's SECP and BLS public keys to compare against the plan.
 - Its beneficiary address and `node_name`, from your saved validator config.
-  A blank beneficiary keeps the target's existing address only after confirmation.
+  A blank beneficiary keeps the target's existing address; the plan shows it as kept.
 
 The Foundation snapshot suggests a sequence when it has a matching record.
 Use a number higher than every sequence this identity has used, even if that
@@ -50,8 +54,8 @@ Prebuilt binary (linux/amd64), verified against the checksum in this README.
 Run as root on the target full node:
 
 ```bash
-curl -fsSLO https://github.com/s0urledd/monad-failover-go/releases/download/v0.1.1/monad-failover &&
-echo "7fd024fd4f176a6a1a342823b3c0f81174715dad21c67f47187e70132abbfd67  monad-failover" | sha256sum -c - &&
+curl -fsSLO https://github.com/s0urledd/monad-failover-go/releases/download/v0.2.0/monad-failover &&
+echo "7c555a5703691f4fce387122a5b06b306364f93672f56cdca557d1f7896fb427  monad-failover" | sha256sum -c - &&
 install -m 755 monad-failover /usr/local/bin/monad-failover
 ```
 
@@ -60,13 +64,13 @@ binary and checksum:
 
 ```bash
 git clone https://github.com/s0urledd/monad-failover-go && cd monad-failover-go
-git checkout v0.1.1
+git checkout v0.2.0
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o monad-failover ./cmd/monad-failover
 sha256sum monad-failover
 install -m 755 monad-failover /usr/local/bin/monad-failover
 ```
 
-Or, with Go installed, `go install github.com/s0urledd/monad-failover-go/cmd/monad-failover@v0.1.1`;
+Or, with Go installed, `go install github.com/s0urledd/monad-failover-go/cmd/monad-failover@v0.2.0`;
 the Go checksum database verifies the source and the binary lands in
 `$(go env GOPATH)/bin`.
 
@@ -90,10 +94,21 @@ Dry-run checks prerequisites and backup format; it does not verify validator
 identity or perform signing. Without `--backup-dir`, the live run asks where
 the keys are. Its default `/opt/monad/backup` may contain the full node's own backups.
 
+Every input can be given as a flag; whatever is missing is asked for. Flags
+never skip the plan or the `STOPPED` gate:
+
+```bash
+monad-failover --backup-dir "/path/to/validator-backups" \
+  --beneficiary 0x<40 hex> --node-name my-validator --seq 12
+```
+
 | Flag | Effect |
 |---|---|
 | `--dry-run` | Read-only preflight |
 | `--backup-dir PATH` | Directory containing the validator's two backup files |
+| `--beneficiary ADDR` | Beneficiary address, `0x` and 40 hex characters |
+| `--node-name NAME` | `node_name` to take over from the old validator |
+| `--seq N` | Name record sequence, higher than any this identity has used |
 | `--public-ip IP` | Use this IPv4 instead of automatic detection |
 | `--resume` | Continue an interrupted run |
 | `--version` | Print the tool version |

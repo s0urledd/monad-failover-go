@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/s0urledd/monad-failover-go/internal/netinfo"
+	"github.com/s0urledd/monad-failover-go/internal/ui"
 )
 
 // SeqSaneMax is the largest sequence that survives a JSON double intact.
@@ -21,11 +22,22 @@ const SeqSaneMax = 9007199254740991
 
 const maxBody = 33554432 // 32 MiB cap on the snapshot body
 
-// Result is a usable sequence from the snapshot.
+// Result is a usable sequence from the snapshot, with the entry's name so
+// the plan can say which validator the imported keys belong to.
 type Result struct {
 	Seq      uint64
 	AgeHours int64
+	Name     string
 }
+
+// Notes that say something about the imported identity rather than about
+// the snapshot itself. The plan reports them; every other note is a
+// snapshot problem.
+const (
+	NoteNotListed   = "0 entries matched this key"
+	NoteNoRecord    = "no name record published for this key yet"
+	NoteBLSMismatch = "BLS key does not match the snapshot entry"
+)
 
 type snapshot struct {
 	Network        string          `json:"network"`
@@ -35,6 +47,7 @@ type snapshot struct {
 }
 
 type validator struct {
+	Name string `json:"name"`
 	Secp string `json:"secp"`
 	Bls  string `json:"bls"`
 	Peer *peer  `json:"peer"`
@@ -146,30 +159,34 @@ func Lookup(body []byte, fetchErr error, network, secp, bls string, maxAge time.
 		return Result{}, fmt.Sprintf("%d entries matched this key", len(hits))
 	}
 	hit := hits[0]
+	// From here on the entry is known; its name is returned with every
+	// note too, so the plan can say which validator the snapshot lists.
+	found := Result{Name: ui.Printable(hit.Name)}
 
 	// Both keys must agree, or this entry is not this validator. An entry
 	// with no BLS is not good enough to act on.
 	if normKey(hit.Bls) == "" {
-		return Result{}, "snapshot entry has no BLS key to check against"
+		return found, "snapshot entry has no BLS key to check against"
 	}
 	if normKey(hit.Bls) != normKey(bls) {
-		return Result{}, "BLS key does not match the snapshot entry"
+		return found, NoteBLSMismatch
 	}
 
 	// No peer record published is NOT sequence zero; it means unknown.
 	if hit.Peer == nil {
-		return Result{}, "no name record published for this key yet"
+		return found, NoteNoRecord
 	}
 	seqText := rawScalar(hit.Peer.RecordSeqNum)
 	if seqText == "" {
-		return Result{}, "no name record published for this key yet"
+		return found, NoteNoRecord
 	}
 	if !seqRe.MatchString(seqText) {
-		return Result{}, "sequence out of usable range"
+		return found, "sequence out of usable range"
 	}
 	seq, err := strconv.ParseUint(seqText, 10, 64)
 	if err != nil || seq > SeqSaneMax {
-		return Result{}, "sequence out of usable range"
+		return found, "sequence out of usable range"
 	}
-	return Result{Seq: seq, AgeHours: age / 3600}, ""
+	found.Seq, found.AgeHours = seq, age/3600
+	return found, ""
 }

@@ -43,6 +43,15 @@ func TestFlags(t *testing.T) {
 		{[]string{"--backup-dir"}, 1, "--backup-dir requires a value"},
 		{[]string{"--public-ip", "999.1.1.1"}, 1, "--public-ip must be a valid IPv4 address"},
 		{[]string{"--public-ip"}, 1, "--public-ip must be a valid IPv4 address"},
+		{[]string{"--beneficiary", "0xabc"}, 1, "--beneficiary must be a 0x-prefixed 40-hex-character address"},
+		{[]string{"--beneficiary"}, 1, "--beneficiary must be a 0x-prefixed 40-hex-character address"},
+		{[]string{"--node-name", "bad name"}, 1, "--node-name may contain only letters, digits, dot, dash, underscore (max 64)"},
+		{[]string{"--node-name", ""}, 1, "--node-name may contain only letters, digits, dot, dash, underscore (max 64)"},
+		{[]string{"--seq", "0"}, 1, "--seq must be a positive number without a leading zero"},
+		{[]string{"--seq", "007"}, 1, "--seq must be a positive number without a leading zero"},
+		{[]string{"--seq", "99999999999999999"}, 1, "--seq must be a positive number without a leading zero"},
+		{[]string{"--seq"}, 1, "--seq must be a positive number without a leading zero"},
+		{[]string{"help"}, 0, "--beneficiary"},
 	}
 	for _, tc := range cases {
 		var code int

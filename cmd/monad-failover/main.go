@@ -1,7 +1,8 @@
 // monad-failover promotes a synced Monad full node to validator, following
 // the official node migration procedure.
 //
-//	monad-failover [--backup-dir PATH] [--public-ip IP] [--resume]
+//	monad-failover [--backup-dir PATH] [--beneficiary ADDR] [--node-name NAME]
+//	               [--seq N] [--public-ip IP] [--resume]
 //	monad-failover --dry-run
 package main
 
@@ -13,6 +14,7 @@ import (
 	"github.com/s0urledd/monad-failover-go/internal/harden"
 	"github.com/s0urledd/monad-failover-go/internal/monad"
 	"github.com/s0urledd/monad-failover-go/internal/netinfo"
+	"github.com/s0urledd/monad-failover-go/internal/nodeconf"
 	"github.com/s0urledd/monad-failover-go/internal/paths"
 	"github.com/s0urledd/monad-failover-go/internal/promote"
 	"github.com/s0urledd/monad-failover-go/internal/state"
@@ -20,22 +22,28 @@ import (
 )
 
 // Version is the tool version printed by --version and in the banner.
-const Version = "0.1.1"
+const Version = "0.2.0"
 
 func usage(argv0 string) {
 	fmt.Printf("monad-failover v%s — promote a synced Monad full node to validator\n", Version)
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Printf("  %s [--backup-dir PATH] [--resume]\n", argv0)
+	fmt.Printf("  %s [--backup-dir PATH] [--beneficiary ADDR] [--node-name NAME] [--seq N]\n", argv0)
+	fmt.Printf("  %s --resume\n", argv0)
 	fmt.Printf("  %s --dry-run\n", argv0)
 	fmt.Println()
+	fmt.Println("Every input can be given as a flag; whatever is missing is asked for.")
+	fmt.Println("The plan is shown and confirmed before anything on the node changes.")
+	fmt.Println()
 	fmt.Println("Flags:")
-	fmt.Println("  --dry-run     Read-only preflight: run every check, change nothing")
-	fmt.Println("  --backup-dir  Directory containing secp-backup / bls-backup key files")
-	fmt.Println("                (skips the interactive key-source prompt)")
-	fmt.Println("  --public-ip   Use this IPv4 in the name record instead of auto-detection")
-	fmt.Println("  --resume      Continue from the last completed step")
-	fmt.Println("  --version     Print version and exit")
+	fmt.Println("  --dry-run      Read-only preflight: run every check, change nothing")
+	fmt.Println("  --backup-dir   Directory containing secp-backup / bls-backup key files")
+	fmt.Println("  --beneficiary  Beneficiary address (0x + 40 hex) for the validator")
+	fmt.Println("  --node-name    node_name to take over from the old validator")
+	fmt.Println("  --seq          Name record sequence number, higher than any used before")
+	fmt.Println("  --public-ip    Use this IPv4 in the name record instead of auto-detection")
+	fmt.Println("  --resume       Continue from the last completed step")
+	fmt.Println("  --version      Print version and exit")
 }
 
 func main() {
@@ -79,6 +87,24 @@ func run(args []string) int {
 				return fail(ui.Die("--public-ip must be a valid IPv4 address"))
 			}
 			opt.PublicIP = args[i]
+		case "--beneficiary":
+			i++
+			if i >= len(args) || !nodeconf.BeneficiaryRe.MatchString(args[i]) {
+				return fail(ui.Die("--beneficiary must be a 0x-prefixed 40-hex-character address"))
+			}
+			opt.Beneficiary = args[i]
+		case "--node-name":
+			i++
+			if i >= len(args) || !nodeconf.NodeNameRe.MatchString(args[i]) {
+				return fail(ui.Die("--node-name may contain only letters, digits, dot, dash, underscore (max 64)"))
+			}
+			opt.NodeName = args[i]
+		case "--seq":
+			i++
+			if i >= len(args) || !promote.ValidSeq(args[i]) {
+				return fail(ui.Die("--seq must be a positive number without a leading zero"))
+			}
+			opt.Seq = args[i]
 		case "--version":
 			fmt.Printf("monad-failover v%s\n", Version)
 			return 0

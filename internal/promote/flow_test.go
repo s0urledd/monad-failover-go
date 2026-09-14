@@ -165,9 +165,21 @@ func (h *harness) dryRun(keyDir string) (int, string) {
 	return code, ansi.ReplaceAllString(buf.String(), "")
 }
 
-// normalStdin answers every prompt of a healthy run through completion.
+// normalStdin answers every prompt of a healthy run through completion:
+// beneficiary, node_name, seq_num, the plan, then STOPPED.
 func normalStdin(ben, name, seq string) string {
-	return "y\ny\n" + ben + "\n" + name + "\n" + seq + "\nSTOPPED\ny\n"
+	return ben + "\n" + name + "\n" + seq + "\ny\nSTOPPED\n"
+}
+
+// planStdin answers a run whose inputs all came from flags.
+const planStdin = "y\nSTOPPED\n"
+
+// resumeStdin answers a resume that shows the plan again before cutover.
+const resumeStdin = "y\nSTOPPED\n"
+
+// abortAtStopped accepts the plan and then refuses the STOPPED gate.
+func abortAtStopped(ben, name, seq string) string {
+	return ben + "\n" + name + "\n" + seq + "\ny\nnope\n"
 }
 
 func (h *harness) normalOpts() Options {
@@ -256,19 +268,30 @@ func TestFullPromotionEndToEnd(t *testing.T) {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
 	expect(t, out, "VALIDATOR PROMOTION COMPLETE")
-	reject(t, out, "Resuming from step")
+	reject(t, out, "Resuming from step", "do these match", "keep this beneficiary", "proceed with cutover")
 	expect(t, out,
 		"Node: in-sync (block difference: 0)",
 		"Network: testnet",
 		"Public IP: "+publicIP,
 		"IKM secrets extracted from backup files",
 		"SECP: "+testutil.MockSecp,
-		"Keys verified",
-		"Beneficiary: "+beneficiary,
-		"node_name: "+nodeName,
+		"Keys imported to staging; confirm them in the plan",
+		"Beneficiary: "+beneficiary+" (entered)",
+		"node_name: "+nodeName+" (entered)",
 		"Last published sequence for this key: 7",
-		"seq_num for this migration: 8",
+		"The snapshot lists these keys as: MockVal",
+		"seq_num for this migration: 8 (entered)",
+		"Public IP: "+publicIP+" (flag)",
 		"Name record signed (seq 8)",
+		"┌─ PLAN",
+		"public ip    "+publicIP+" (flag, matches detection)",
+		"address      "+publicIP+":8000, auth port 8001",
+		"secp         "+testutil.MockSecp,
+		"bls          "+testutil.MockBls,
+		"snapshot     MockVal, last published seq 7",
+		"seq_num      8 (entered)",
+		"beneficiary  "+beneficiary+" (entered)",
+		"node_name    "+nodeName+" (entered)",
 		"Old validator confirmed stopped or offline",
 		"Services masked for the swap",
 		"SECP key placed", "BLS key placed", "node.toml placed",
@@ -334,7 +357,7 @@ func TestAbortAtStoppedLeavesLiveNodeUntouched(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
 	before := h.liveSHAs()
-	code, out := h.run("y\ny\n"+beneficiary+"\n"+nodeName+"\n8\nnope\n", h.normalOpts())
+	code, out := h.run(abortAtStopped(beneficiary, nodeName, "8"), h.normalOpts())
 	if code != 1 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -353,11 +376,11 @@ func TestStagedKeyChangedAfterConfirmationIsRefused(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
 	before := h.liveSHAs()
-	if code, out := h.run("y\ny\n"+beneficiary+"\n"+nodeName+"\n8\nnope\n", h.normalOpts()); code != 1 {
+	if code, out := h.run(abortAtStopped(beneficiary, nodeName, "8"), h.normalOpts()); code != 1 {
 		t.Fatalf("setup exit %d:\n%s", code, out)
 	}
 	os.WriteFile(h.d.SecpNew, []byte("MOCK-KEYSTORE ikm="+strings.Repeat("f", 64)+" pw=testpass\n"), 0o600)
-	code, out := h.run("STOPPED\ny\n", Options{Resume: true, PublicIP: publicIP})
+	code, out := h.run(resumeStdin, Options{Resume: true, PublicIP: publicIP})
 	if code != 1 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -374,12 +397,12 @@ func TestStagedKeyChangedAfterConfirmationIsRefused(t *testing.T) {
 func TestStagedConfigChangedAfterSigningIsRefused(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
-	if code, out := h.run("y\ny\n"+beneficiary+"\n"+nodeName+"\n8\nnope\n", h.normalOpts()); code != 1 {
+	if code, out := h.run(abortAtStopped(beneficiary, nodeName, "8"), h.normalOpts()); code != 1 {
 		t.Fatalf("setup exit %d:\n%s", code, out)
 	}
 	toml := h.read(h.d.TomlNew)
 	os.WriteFile(h.d.TomlNew, []byte(strings.Replace(toml, beneficiary, "0x1111111111111111111111111111111111111111", 1)), 0o600)
-	code, out := h.run("STOPPED\ny\n", Options{Resume: true, PublicIP: publicIP})
+	code, out := h.run(resumeStdin, Options{Resume: true, PublicIP: publicIP})
 	if code != 1 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -391,7 +414,7 @@ func TestMalformedBeneficiaryRejectedBeforeAnyChange(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
 	before := h.liveSHAs()
-	code, out := h.run("y\ny\n0xnotanaddress\n", h.normalOpts())
+	code, out := h.run("0xnotanaddress\n", h.normalOpts())
 	if code != 1 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -480,13 +503,15 @@ func TestPartialCutoverIsResumable(t *testing.T) {
 		t.Errorf("monad-bft not masked while half-swapped: %q", out)
 	}
 
-	// A resume into an unfinished swap asks for the two cutover confirmations
-	// again before it touches anything.
-	code, out = h.run("STOPPED\ny\n", Options{Resume: true, PublicIP: publicIP})
+	// A resume into an unfinished swap shows the plan and asks for both
+	// confirmations again before it touches anything.
+	code, out = h.run(resumeStdin, Options{Resume: true, PublicIP: publicIP})
 	if code != 0 {
 		t.Fatalf("resume exit %d:\n%s", code, out)
 	}
-	expect(t, out, "Resuming from step 7", "SECP key already in place from a previous cutover attempt", "BLS key placed", "node.toml placed", "VALIDATOR PROMOTION COMPLETE")
+	expect(t, out, "Resuming from step 7", "┌─ PLAN", "This cutover already began; the plan is what --resume finishes.",
+		"seq_num      8 (entered)", "snapshot     MockVal, last published seq 7",
+		"SECP key already in place from a previous cutover attempt", "BLS key placed", "node.toml placed", "VALIDATOR PROMOTION COMPLETE")
 	if !strings.Contains(h.read(h.p.BlsKey), "ikm="+testutil.BlsIKM) {
 		t.Error("BLS key not placed on resume")
 	}
@@ -773,14 +798,14 @@ func TestInterruptedMaskIsNotMistakenForTheOperators(t *testing.T) {
 	// the observe-first rule, resume believing the operator masked the
 	// units. Simulate: reach cutover, mask by hand as the tool would, and
 	// leave state at the point just after mask_observed was written.
-	if code, out := h.run("y\ny\n"+beneficiary+"\n"+nodeName+"\n8\nnope\n", h.normalOpts()); code != 1 {
+	if code, out := h.run(abortAtStopped(beneficiary, nodeName, "8"), h.normalOpts()); code != 1 {
 		t.Fatalf("setup exit %d:\n%s", code, out)
 	}
 	st := h.d.Store()
 	st.Set("premasked_units", "")
 	st.Set("mask_observed", "1")
 	h.mock("systemctl", "mask", "monad-bft", "monad-execution", "monad-rpc")
-	code, out := h.run("STOPPED\ny\n", Options{Resume: true, PublicIP: publicIP})
+	code, out := h.run(resumeStdin, Options{Resume: true, PublicIP: publicIP})
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -817,7 +842,7 @@ func TestSecondRunRefusedWithoutTouchingState(t *testing.T) {
 func TestLeftoverStateOffersResumeAndExitsCleanlyWhenDeclined(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
-	if code, _ := h.run("y\ny\n0xbad\n", h.normalOpts()); code != 1 {
+	if code, _ := h.run("0xbad\n", h.normalOpts()); code != 1 {
 		t.Fatal("setup")
 	}
 	if h.stateValue("last_step") != "4" {
@@ -846,7 +871,8 @@ func TestFoundationSuggestionAcceptedWithEnter(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
-	expect(t, out, "Suggested for this migration: 8", "new seq_num [8]", "seq_num for this migration: 8", "VALIDATOR PROMOTION COMPLETE")
+	expect(t, out, "Suggested for this migration: 8", "new seq_num [8]", "seq_num for this migration: 8 (suggested by the snapshot)",
+		"seq_num      8 (suggested by the snapshot)", "VALIDATOR PROMOTION COMPLETE")
 }
 
 func TestFoundationSequenceAtOrBelowPublishedIsRefused(t *testing.T) {
@@ -868,7 +894,8 @@ func TestFoundationNoRecordIsNotTreatedAsZero(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
-	expect(t, out, "no name record published for this key yet", "seq_num for this migration: 1", "VALIDATOR PROMOTION COMPLETE")
+	expect(t, out, "no name record published for this key yet", "usual for a validator outside the active set",
+		"seq_num for this migration: 1", "snapshot     MockVal, no name record published (outside the active set)", "VALIDATOR PROMOTION COMPLETE")
 	reject(t, out, "Last published sequence")
 }
 
@@ -961,25 +988,33 @@ func TestSectionScopedUpdatePreservesUnrelatedTable(t *testing.T) {
 	}
 }
 
-func TestBlankBeneficiaryShowsKeptValueAndAsks(t *testing.T) {
+func TestBlankBeneficiaryKeepsConfigValueIntoPlan(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
 	os.WriteFile(h.p.NodeToml, []byte(strings.Replace(h.read(h.p.NodeToml),
 		"0x0000000000000000000000000000000000000000", "0xC0FFEE0000000000000000000000000000C0FFEE", 1)), 0o644)
-	// blank, then decline
-	code, out := h.run("y\ny\n\nn\n", h.normalOpts())
-	if code != 1 {
-		t.Fatalf("decline exit %d:\n%s", code, out)
-	}
-	expect(t, out, "Keeping: 0xC0FFEE0000000000000000000000000000C0FFEE", "Aborted — re-run and enter the beneficiary address you want.")
-	h.assertServicesUntouched()
-	// blank, then accept (the declined run left state at step 4; start clean)
-	h.d.Store().Clear()
-	code, out = h.run("y\ny\n\ny\n"+nodeName+"\n8\nSTOPPED\ny\n", h.normalOpts())
+	code, out := h.run(normalStdin("", nodeName, "8"), h.normalOpts())
 	if code != 0 {
-		t.Fatalf("accept exit %d:\n%s", code, out)
+		t.Fatalf("exit %d:\n%s", code, out)
 	}
-	expect(t, out, "Beneficiary kept: 0xC0FFEE0000000000000000000000000000C0FFEE", "VALIDATOR PROMOTION COMPLETE")
+	expect(t, out, "Beneficiary: 0xC0FFEE0000000000000000000000000000C0FFEE (kept from node.toml)",
+		"beneficiary  0xC0FFEE0000000000000000000000000000C0FFEE (kept from node.toml)", "VALIDATOR PROMOTION COMPLETE")
+	reject(t, out, "keep this beneficiary?")
+	if !tomlIn(h.read(h.p.NodeToml), "", "beneficiary", `"0xC0FFEE0000000000000000000000000000C0FFEE"`) {
+		t.Error("kept beneficiary not in the placed config")
+	}
+}
+
+func TestBlankBeneficiaryWithNoneInConfigIsRefused(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	os.WriteFile(h.p.NodeToml, []byte(strings.Replace(h.read(h.p.NodeToml), "beneficiary = ", "# beneficiary = ", 1)), 0o644)
+	code, out := h.run(normalStdin("", nodeName, "8"), h.normalOpts())
+	if code != 1 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	expect(t, out, "(none set)", "No beneficiary given and none set in the config.")
+	h.assertServicesUntouched()
 }
 
 func TestExplicitZeroBeneficiaryWarns(t *testing.T) {
@@ -989,7 +1024,7 @@ func TestExplicitZeroBeneficiaryWarns(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
-	expect(t, out, "You entered the ZERO address.")
+	expect(t, out, "You entered the ZERO address.", "The beneficiary is the ZERO address: this validator will have no beneficiary set.")
 }
 
 func TestInvalidNodeNameAbortsBeforeServiceChanges(t *testing.T) {
@@ -1019,14 +1054,14 @@ func TestIPDetectionFailureGivesOverrideHintAndResumeFinishes(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
 	h.ep.IP = ""
-	code, out := h.run("y\ny\n"+beneficiary+"\n"+nodeName+"\n8\n", Options{KeySourceDir: h.p.BackupRoot})
+	code, out := h.run(beneficiary+"\n"+nodeName+"\n8\n", Options{KeySourceDir: h.p.BackupRoot})
 	if code != 1 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
 	expect(t, out, "Could not detect a valid public IPv4 address.", "monad-failover --resume --public-ip <this-server-public-IPv4>")
 	reject(t, out, "Public IP:")
 	h.assertServicesUntouched()
-	code, out = h.run("STOPPED\ny\n", Options{Resume: true, PublicIP: publicIP})
+	code, out = h.run(resumeStdin, Options{Resume: true, PublicIP: publicIP})
 	if code != 0 {
 		t.Fatalf("resume exit %d:\n%s", code, out)
 	}
@@ -1041,16 +1076,30 @@ func TestPublicIPOverrideIsSigned(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
-	expect(t, out, "Public IP: 203.0.113.42")
+	expect(t, out, "Public IP: 203.0.113.42 (flag)",
+		"--public-ip 203.0.113.42 differs from the address this host reports: 198.51.100.99",
+		"public ip    203.0.113.42 (flag; host reports 198.51.100.99)",
+		"--public-ip differs from the address this host reports. Peers must reach this node at 203.0.113.42.")
 	if !tomlIn(h.read(h.p.NodeToml), "peer_discovery", "self_address", `"203.0.113.42:8000"`) {
 		t.Error("override not written to node.toml")
 	}
 }
 
+func TestDetectedIPCarriesItsSourceIntoThePlan(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	code, out := h.run(normalStdin(beneficiary, nodeName, "8"), Options{KeySourceDir: h.p.BackupRoot})
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	expect(t, out, "Public IP: "+publicIP+" (detected)", "public ip    "+publicIP+" (detected)")
+	reject(t, out, "differs from the address this host reports")
+}
+
 func TestManualIKMEntryPromotes(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
-	stdin := "y\n2\n" + testutil.SecpIKM + "\n" + testutil.BlsIKM + "\ny\n" + beneficiary + "\n" + nodeName + "\n8\nSTOPPED\ny\n"
+	stdin := "2\n" + testutil.SecpIKM + "\n" + testutil.BlsIKM + "\n" + normalStdin(beneficiary, nodeName, "8")
 	code, out := h.run(stdin, Options{PublicIP: publicIP})
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
@@ -1064,7 +1113,7 @@ func TestManualIKMEntryPromotes(t *testing.T) {
 func TestInteractiveBackupDirectoryDefaultsToBackupRoot(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
-	code, out := h.run("y\n1\n\ny\n"+beneficiary+"\n"+nodeName+"\n8\nSTOPPED\ny\n", Options{PublicIP: publicIP})
+	code, out := h.run("1\n\n"+normalStdin(beneficiary, nodeName, "8"), Options{PublicIP: publicIP})
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -1108,20 +1157,214 @@ func TestEnvWithCRLFYieldsExactPassword(t *testing.T) {
 	expect(t, out, "VALIDATOR PROMOTION COMPLETE")
 }
 
-func TestKeyMismatchDeclinedAborts(t *testing.T) {
+func TestPlanRejectedClearsStagingAndState(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
-	code, out := h.run("y\nn\n", h.normalOpts())
+	before := h.liveSHAs()
+	code, out := h.run(beneficiary+"\n"+nodeName+"\n8\nn\n", h.normalOpts())
 	if code != 1 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
-	expect(t, out, "Key mismatch — aborting.")
+	expect(t, out, "secp         "+testutil.MockSecp, "bls          "+testutil.MockBls,
+		"Nothing on the live node has changed.", "Plan rejected — nothing was changed.", "Re-run with the corrected inputs.")
+	reject(t, out, "type STOPPED to confirm")
 	h.assertServicesUntouched()
-	if _, err := os.Stat(h.d.SecpNew); err != nil {
-		t.Error("staging key missing: the prompt should follow the import")
+	if h.liveSHAs() != before {
+		t.Error("live files changed")
 	}
-	if h.stateValue("secp_pub") != "" {
-		t.Error("unconfirmed keys recorded in state")
+	if h.stateExists() {
+		t.Error("state kept after the plan was rejected")
+	}
+	for _, f := range []string{h.d.SecpNew, h.d.BlsNew, h.d.TomlNew} {
+		if _, err := os.Stat(f); err == nil {
+			t.Errorf("staged file kept: %s", f)
+		}
+	}
+	// the identity backup is kept, and the next run starts clean
+	if dirs, _ := filepath.Glob(filepath.Join(h.p.BackupRoot, "failover-*")); len(dirs) != 1 {
+		t.Errorf("identity backup: %v", dirs)
+	}
+	code, out = h.normalRun()
+	if code != 0 {
+		t.Fatalf("re-run exit %d:\n%s", code, out)
+	}
+	reject(t, out, "Previous run stopped at step")
+	expect(t, out, "VALIDATOR PROMOTION COMPLETE")
+}
+
+func TestPlanRejectedAfterCutoverBeganKeepsState(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	old := place.Rename
+	place.Rename = func(a, b string) error {
+		if b == h.p.BlsKey {
+			return errors.New("simulated")
+		}
+		return os.Rename(a, b)
+	}
+	if code, _ := h.normalRun(); code != 1 {
+		t.Fatal("setup did not interrupt")
+	}
+	place.Rename = old
+	code, out := h.run("n\n", Options{Resume: true, PublicIP: publicIP})
+	if code != 1 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	expect(t, out, "Plan rejected, but the cutover had already begun; nothing more was changed.",
+		"monad-failover --resume", "restore this node's previous identity from: "+h.stateValue("backup_dir"))
+	if h.stateValue("cutover_started") != "1" || !h.stateExists() {
+		t.Error("state of a begun cutover was cleared")
+	}
+	if _, err := os.Stat(h.d.BlsNew); err != nil {
+		t.Error("staged BLS key removed while the swap is unfinished")
+	}
+	if strings.Contains(h.mockLog(), "systemctl start") {
+		t.Error("services started")
+	}
+}
+
+func TestFlagInputsSkipPromptsButNotConfirmations(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	code, out := h.run(planStdin, Options{KeySourceDir: h.p.BackupRoot, PublicIP: publicIP,
+		Beneficiary: beneficiary, NodeName: nodeName, Seq: "9"})
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	expect(t, out, "Beneficiary: "+beneficiary+" (flag)", "node_name: "+nodeName+" (flag)", "seq_num for this migration: 9 (flag)",
+		"seq_num      9 (flag)", "beneficiary  "+beneficiary+" (flag)", "node_name    "+nodeName+" (flag)",
+		"proceed with this plan?", "type STOPPED to confirm", "VALIDATOR PROMOTION COMPLETE")
+	reject(t, out, "? beneficiary ›", "? node_name ›", "new seq_num", "Suggested for this migration", "Press Enter to use it")
+	if !tomlIn(h.read(h.p.NodeToml), "peer_discovery", "self_record_seq_num", "9") {
+		t.Error("flag sequence not signed")
+	}
+}
+
+func TestSeqFlagAtOrBelowPublishedIsRefused(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	code, out := h.run(planStdin, Options{KeySourceDir: h.p.BackupRoot, PublicIP: publicIP,
+		Beneficiary: beneficiary, NodeName: nodeName, Seq: "7"})
+	if code != 1 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	expect(t, out, "seq_num 7 is not higher than the 7 already published for this key.")
+	h.assertServicesUntouched()
+}
+
+func TestInvalidFlagValuesAreRefusedByTheRun(t *testing.T) {
+	for _, tc := range []struct {
+		opt  Options
+		want string
+	}{
+		{Options{Beneficiary: "0xnope"}, "beneficiary must be a 0x-prefixed 40-hex-character address"},
+		{Options{Beneficiary: beneficiary, NodeName: "bad name"}, "node_name may contain only letters, digits, dot, dash, underscore"},
+		{Options{Beneficiary: beneficiary, NodeName: nodeName, Seq: "07"}, "Must be a positive number"},
+	} {
+		h := newHarness(t)
+		h.healthyEnv()
+		tc.opt.KeySourceDir, tc.opt.PublicIP = h.p.BackupRoot, publicIP
+		code, out := h.run(planStdin, tc.opt)
+		if code != 1 {
+			t.Fatalf("%+v: exit %d:\n%s", tc.opt, code, out)
+		}
+		expect(t, out, tc.want)
+		h.assertServicesUntouched()
+	}
+}
+
+func TestKeysNotInSnapshotAreFlaggedInThePlan(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	h.ep.Snapshot = testutil.Snapshot(testutil.SnapshotOpts{Secp: "0xSECPother00000000000000000000000000000000000"})
+	code, out := h.run(normalStdin(beneficiary, nodeName, "3"), h.normalOpts())
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	expect(t, out, "These keys are not in the Foundation snapshot for testnet.",
+		"snapshot     not listed for testnet (outside the active set?)",
+		"The Foundation snapshot does not list these keys. Check that the backups belong to this validator.",
+		"VALIDATOR PROMOTION COMPLETE")
+}
+
+func TestBLSMismatchWithSnapshotIsFlaggedInThePlan(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	h.ep.Snapshot = testutil.Snapshot(testutil.SnapshotOpts{BadBLS: true})
+	code, out := h.run(normalStdin(beneficiary, nodeName, "3"), h.normalOpts())
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	expect(t, out, "Check that bls-backup belongs to the same validator as secp-backup.",
+		"snapshot     MockVal, BLS key differs from this validator's entry",
+		"The BLS key does not match the snapshot entry for this SECP key.")
+}
+
+func TestSnapshotNameIsPrintedSafely(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	h.ep.Snapshot = strings.Replace(testutil.Snapshot(testutil.SnapshotOpts{}), `"name": "MockVal"`, `"name": "Mock\u001b[31mVal\u0007"`, 1)
+	code, out := h.run(normalStdin(beneficiary, nodeName, "8"), h.normalOpts())
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	expect(t, out, "snapshot     Mock[31mVal, last published seq 7")
+	if strings.Contains(out, "\x1b[31m") || strings.Contains(out, "\x07") {
+		t.Error("control characters from the snapshot reached the terminal")
+	}
+}
+
+func TestResumeBeforeCutoverShowsThePlanFromState(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	h.ep.IP = "198.51.100.99"
+	if code, out := h.run(abortAtStopped("", nodeName, "8"), Options{KeySourceDir: h.p.BackupRoot, PublicIP: publicIP}); code != 1 {
+		t.Fatalf("setup exit %d:\n%s", code, out)
+	}
+	code, out := h.run(resumeStdin, Options{Resume: true})
+	if code != 0 {
+		t.Fatalf("resume exit %d:\n%s", code, out)
+	}
+	expect(t, out, "Resuming from step 7", "┌─ PLAN",
+		"public ip    "+publicIP+" (flag; host reports 198.51.100.99)",
+		"beneficiary  0x0000000000000000000000000000000000000000 (kept from node.toml)",
+		"The beneficiary is the ZERO address",
+		"node_name    "+nodeName+" (entered)", "seq_num      8 (entered)",
+		"snapshot     MockVal, last published seq 7", "VALIDATOR PROMOTION COMPLETE")
+}
+
+// A kept node_name is the node's own and is never held to the flag's
+// charset; it is shown in the plan, on the resume too, as it is.
+func TestKeptNodeNameOutsideTheFlagCharsetStillResumes(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	os.WriteFile(h.p.NodeToml, []byte(strings.Replace(h.read(h.p.NodeToml), `node_name = "fullnode-one"`, `node_name = "my node (old)"`, 1)), 0o644)
+	if code, out := h.run(abortAtStopped(beneficiary, "", "8"), h.normalOpts()); code != 1 {
+		t.Fatalf("setup exit %d:\n%s", code, out)
+	}
+	code, out := h.run(resumeStdin, Options{Resume: true, PublicIP: publicIP})
+	if code != 0 {
+		t.Fatalf("resume exit %d:\n%s", code, out)
+	}
+	expect(t, out, "node_name    my node (old) (kept from node.toml)", "VALIDATOR PROMOTION COMPLETE")
+	if !tomlIn(h.read(h.p.NodeToml), "", "node_name", `"my node (old)"`) {
+		t.Error("kept node_name was changed")
+	}
+}
+
+func TestPublicIPFlagOnResumeAfterSigningIsIgnoredWithNotice(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	if code, out := h.run(abortAtStopped(beneficiary, nodeName, "8"), h.normalOpts()); code != 1 {
+		t.Fatalf("setup exit %d:\n%s", code, out)
+	}
+	code, out := h.run(resumeStdin, Options{Resume: true, PublicIP: "203.0.113.99"})
+	if code != 0 {
+		t.Fatalf("resume exit %d:\n%s", code, out)
+	}
+	expect(t, out, "--public-ip 203.0.113.99 is ignored: the name record was already signed for "+publicIP+".")
+	if !tomlIn(h.read(h.p.NodeToml), "peer_discovery", "self_address", `"`+publicIP+`:8000"`) {
+		t.Error("signed address not the one placed")
 	}
 }
 
@@ -1135,7 +1378,7 @@ func TestStateLeftAtStep3ResumesFromStep4(t *testing.T) {
 	backup := filepath.Join(h.p.BackupRoot, "failover-20260911-072052")
 	os.MkdirAll(backup, 0o700)
 	os.WriteFile(h.d.File, []byte("last_step=3\nnetwork=testnet\nbackup_dir="+backup+"\n"), 0o600)
-	code, out := h.run("y\n"+beneficiary+"\n"+nodeName+"\n8\nSTOPPED\ny\n", Options{Resume: true, KeySourceDir: h.p.BackupRoot, PublicIP: publicIP})
+	code, out := h.run(normalStdin(beneficiary, nodeName, "8"), Options{Resume: true, KeySourceDir: h.p.BackupRoot, PublicIP: publicIP})
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -1285,7 +1528,7 @@ func TestAbortPreservesLivePermissions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	code, out := h.run("y\ny\n"+beneficiary+"\n"+nodeName+"\n8\nnope\n", h.normalOpts())
+	code, out := h.run(abortAtStopped(beneficiary, nodeName, "8"), h.normalOpts())
 	if code != 1 {
 		t.Fatalf("exit %d: %s", code, out)
 	}
@@ -1302,11 +1545,11 @@ func TestCommentedBeneficiaryResumes(t *testing.T) {
 	h.healthyEnv()
 	conf := strings.Replace(h.read(h.p.NodeToml), `beneficiary = "0x0000000000000000000000000000000000000000"`, `beneficiary = "`+beneficiary+`" # rewards`, 1)
 	os.WriteFile(h.p.NodeToml, []byte(conf), 0600)
-	code, out := h.run("y\ny\n\ny\n"+nodeName+"\n8\nnope\n", h.normalOpts())
+	code, out := h.run(abortAtStopped("", nodeName, "8"), h.normalOpts())
 	if code != 1 || h.stateValue("beneficiary") != beneficiary {
 		t.Fatalf("initial run: %s", out)
 	}
-	code, out = h.run("STOPPED\ny\n", Options{Resume: true, PublicIP: publicIP})
+	code, out = h.run(resumeStdin, Options{Resume: true, PublicIP: publicIP})
 	if code != 0 {
 		t.Fatalf("resume failed: %s", out)
 	}

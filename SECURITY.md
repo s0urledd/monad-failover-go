@@ -128,9 +128,10 @@ every point it can be interrupted is recoverable:
   `0700`, not in the config directory. That directory belongs to the `monad`
   account, so anything staged there could be replaced between the checksum
   check and the rename.
-- Each staged file is checksummed when it is created and you confirm it. The
-  recorded value is never refreshed from disk, so a file changed after your
-  confirmation is refused rather than accepted as the new expected content.
+- Each staged file is checksummed when it is created; the plan you confirm at
+  cutover covers exactly that content. The recorded value is never refreshed
+  from disk, so a file changed after your confirmation is refused rather than
+  accepted as the new expected content.
   Symlinks and non-regular files are refused.
 - Placement copies the verified content into the destination directory, checks
   it again there, and only then renames it, so the final step is a rename

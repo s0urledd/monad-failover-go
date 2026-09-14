@@ -297,6 +297,14 @@ var (
 	benRe     = regexp.MustCompile(`^(0x[0-9A-Fa-f]{40})?$`)
 	ipOptRe   = regexp.MustCompile(`^([0-9]{1,3}(\.[0-9]{1,3}){3})?$`)
 	pathRe    = regexp.MustCompile(`^[A-Za-z0-9._/-]*$`)
+
+	// Plan fields: shown to the operator at cutover, never acted on. They
+	// are still held to the shapes the run writes, so a tampered file
+	// cannot put arbitrary text in front of the confirmation.
+	shownRe      = regexp.MustCompile(`^[^\p{Cc}]{0,64}$`)
+	sourceRe     = regexp.MustCompile(`^(flag|entered|detected|kept from node\.toml|suggested by the snapshot)?$`)
+	snapStatusRe = regexp.MustCompile(`^(found|no-record|not-listed|bls-mismatch|unavailable)?$`)
+	snapNoteRe   = regexp.MustCompile(`^[A-Za-z0-9 ,.'_-]{0,120}$`)
 )
 
 // CheckField refuses a value whose shape is wrong. Every field reaches a
@@ -386,6 +394,18 @@ type Resume struct {
 	StagedSecpSha  string
 	StagedBlsSha   string
 	StagedTomlSha  string
+
+	// shown again in the plan on resume
+	NodeName       string
+	DetectedIP     string
+	IPSource       string
+	BenSource      string
+	SeqSource      string
+	NameSource     string
+	SnapshotStatus string
+	SnapshotName   string
+	SnapshotSeq    string
+	SnapshotNote   string
 }
 
 // ErrNoPreviousRun is returned by LoadResume when there is nothing to resume.
@@ -421,6 +441,16 @@ func (s Store) LoadResume(backupRoot string, validIPv4 func(string) bool) (Resum
 	r.StagedSecpSha = s.Get("staged_secp_sha")
 	r.StagedBlsSha = s.Get("staged_bls_sha")
 	r.StagedTomlSha = s.Get("staged_toml_sha")
+	r.NodeName = s.Get("node_name")
+	r.DetectedIP = s.Get("detected_ip")
+	r.IPSource = s.Get("ip_source")
+	r.BenSource = s.Get("ben_source")
+	r.SeqSource = s.Get("seq_source")
+	r.NameSource = s.Get("name_source")
+	r.SnapshotStatus = s.Get("snapshot_status")
+	r.SnapshotName = s.Get("snapshot_name")
+	r.SnapshotSeq = s.Get("snapshot_seq")
+	r.SnapshotNote = s.Get("snapshot_note")
 
 	checks := []struct {
 		k, v string
@@ -441,6 +471,16 @@ func (s Store) LoadResume(backupRoot string, validIPv4 func(string) bool) (Resum
 		{"staged_toml_sha", r.StagedTomlSha, optSha64},
 		{"ip", r.IP, ipOptRe},
 		{"backup_dir", r.BackupDir, pathRe},
+		{"node_name", r.NodeName, shownRe},
+		{"detected_ip", r.DetectedIP, ipOptRe},
+		{"ip_source", r.IPSource, sourceRe},
+		{"ben_source", r.BenSource, sourceRe},
+		{"seq_source", r.SeqSource, sourceRe},
+		{"name_source", r.NameSource, sourceRe},
+		{"snapshot_status", r.SnapshotStatus, snapStatusRe},
+		{"snapshot_name", r.SnapshotName, shownRe},
+		{"snapshot_seq", r.SnapshotSeq, digitsRe},
+		{"snapshot_note", r.SnapshotNote, snapNoteRe},
 	}
 	for _, c := range checks {
 		if err := s.CheckField(c.k, c.v, c.re, backupRoot); err != nil {

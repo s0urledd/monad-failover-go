@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 	"unsafe"
 )
 
@@ -296,4 +297,22 @@ func Zero(b []byte) {
 	for i := range b {
 		b[i] = 0
 	}
+}
+
+// Printable makes a string from an external source (a snapshot, a config
+// file) safe to print: control characters and anything unprintable are
+// dropped and the result is capped at 64 runes, so no terminal escape
+// sequence reaches the operator's screen through a value the tool shows.
+func Printable(s string) string {
+	var out []rune
+	for _, r := range s {
+		if !unicode.IsPrint(r) {
+			continue
+		}
+		out = append(out, r)
+		if len(out) == 64 {
+			break
+		}
+	}
+	return strings.TrimSpace(string(out))
 }

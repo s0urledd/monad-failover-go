@@ -26,14 +26,15 @@ needs a throwaway VM. Do not run it on a machine holding real validator keys.
 
 ## The test
 
-1. Start a live run and answer the prompts until you reach the `STOPPED` gate.
+1. Start a live run, answer the prompts and confirm the plan to reach the
+   `STOPPED` gate.
 2. Before typing `STOPPED`, open a second shell and confirm the units are enabled:
 
    ```bash
    systemctl is-enabled monad-bft monad-execution monad-rpc
    ```
 
-3. Type `STOPPED` and confirm the cutover. The test build prints
+3. Type `STOPPED`. The test build prints
    `reboottest build: pausing 30s after the SECP placement`; kill the run
    during that pause, so the node is left with the new SECP key and the old
    BLS key and config.

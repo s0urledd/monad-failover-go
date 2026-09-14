@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/s0urledd/monad-failover-go/internal/monad"
+	"github.com/s0urledd/monad-failover-go/internal/nodeconf"
 	"github.com/s0urledd/monad-failover-go/internal/place"
 	"github.com/s0urledd/monad-failover-go/internal/rpcports"
 	"github.com/s0urledd/monad-failover-go/internal/systemd"
@@ -23,57 +24,150 @@ func (r *Run) restoreFrom() string {
 	return r.p.BackupRoot
 }
 
-func truncate24(s string) string {
-	if len(s) > 24 {
-		return s[:24] + "..."
+// ── phase 7: the plan, the STOPPED gate, then the swap ───────────────
+
+func withSource(v, source string) string {
+	if source == "" {
+		return v
 	}
-	return s + "..."
+	return v + " (" + source + ")"
 }
 
-// ── phase 7: confirm the old validator is stopped, then swap ─────────
+// ipLine is the public IP with where it came from and, for an override,
+// what the host itself reported.
+func (r *Run) ipLine() string {
+	if r.ipSource != "flag" {
+		return withSource(r.ip, r.ipSource)
+	}
+	switch {
+	case r.detectedIP == "":
+		return r.ip + " (flag; detection failed)"
+	case r.detectedIP != r.ip:
+		return r.ip + " (flag; host reports " + r.detectedIP + ")"
+	}
+	return r.ip + " (flag, matches detection)"
+}
+
+// snapshotLine says what the Foundation snapshot knows about these keys.
+func (r *Run) snapshotLine() string {
+	name := ui.Printable(r.snapshotName)
+	if name == "" {
+		name = "listed"
+	}
+	switch r.snapshotStatus {
+	case "found":
+		return fmt.Sprintf("%s, last published seq %d", name, r.foundSeq)
+	case "no-record":
+		return name + ", no name record published (outside the active set)"
+	case "not-listed":
+		return "not listed for " + r.network + " (outside the active set?)"
+	case "bls-mismatch":
+		return name + ", BLS key differs from this validator's entry"
+	case "unavailable":
+		return "unavailable (" + r.snapshotNote + ")"
+	}
+	return "not checked"
+}
+
+// seqLine is the sequence the record carries. The signer may have emitted
+// a higher value than requested; both are shown then.
+func (r *Run) seqLine() string {
+	if r.selfSeq != "" && r.selfSeq != r.newSeq {
+		return r.selfSeq + " (signer emitted; " + r.newSeq + " was " + r.seqSource + ")"
+	}
+	return withSource(r.newSeq, r.seqSource)
+}
+
+// showPlan prints everything the cutover will do, with where each value
+// came from, so one look catches a wrong flag or a wrong backup.
+func (r *Run) showPlan() {
+	host, _ := os.Hostname()
+	row := func(k, v string) { r.c.Printf("│  %-12s %s\n", k, v) }
+	r.c.Blank()
+	r.c.Println("┌─ PLAN ─────────────────────────────────────────────────────")
+	row("hostname", host)
+	row("network", r.network)
+	row("public ip", r.ipLine())
+	row("address", r.selfAddress+", auth port "+r.selfAuthPort)
+	row("secp", r.secpPub)
+	row("bls", r.blsPub)
+	row("snapshot", r.snapshotLine())
+	row("seq_num", r.seqLine())
+	row("beneficiary", withSource(r.beneficiary, r.benSource))
+	row("node_name", withSource(orNone(r.nodeName), r.nameSource))
+	r.c.Println("└────────────────────────────────────────────────────────────")
+
+	if nodeconf.ZeroAddressRe.MatchString(r.beneficiary) {
+		r.c.Warn("The beneficiary is the ZERO address: this validator will have no beneficiary set.")
+	}
+	if r.ipSource == "flag" && r.detectedIP != "" && r.detectedIP != r.ip {
+		r.c.Warn("--public-ip differs from the address this host reports. Peers must reach this node at " + r.ip + ".")
+	}
+	if r.opt.PublicIP != "" && r.opt.PublicIP != r.ip {
+		r.c.Warn("--public-ip " + r.opt.PublicIP + " is ignored: the name record was already signed for " + r.ip + ".")
+	}
+	switch r.snapshotStatus {
+	case "not-listed":
+		r.c.Warn("The Foundation snapshot does not list these keys. Check that the backups belong to this validator.")
+	case "bls-mismatch":
+		r.c.Warn("The BLS key does not match the snapshot entry for this SECP key. Check that both backups belong to the same validator.")
+	}
+}
+
+// discardPlan removes what a rejected plan had prepared: the staged files
+// and the run state. The live node was never touched; the identity backup
+// from phase 3 is kept.
+func (r *Run) discardPlan() {
+	for _, f := range []string{r.d.SecpNew, r.d.BlsNew, r.d.TomlNew} {
+		_ = os.Remove(f)
+	}
+	r.st.Clear()
+}
+
+// confirmPlan is the one confirmation that covers every prepared value,
+// followed by the STOPPED gate for the old validator.
+func (r *Run) confirmPlan() error {
+	r.showPlan()
+	r.c.Blank()
+	started := r.st.Get("cutover_started") == "1"
+	if started {
+		r.c.Println("  This cutover already began; the plan is what --resume finishes.")
+	} else {
+		r.c.Println("  Nothing on the live node has changed. Answering no removes the staged")
+		r.c.Println("  files and the run state, so the next run starts clean.")
+	}
+	if !r.c.ConfirmYN("proceed with this plan?") {
+		if started {
+			return ui.Die("Plan rejected, but the cutover had already begun; nothing more was changed.",
+				"Finish it with: "+r.opt.Argv0+" --resume",
+				"To roll back instead, restore this node's previous identity from: "+r.restoreFrom(),
+				"(see docs/recovery.md)")
+		}
+		r.discardPlan()
+		return ui.Die("Plan rejected — nothing was changed.",
+			"The identity backup in "+r.restoreFrom()+" is kept. Re-run with the corrected inputs.")
+	}
+
+	r.c.Blank()
+	r.c.Warn("Stop the old validator before confirming cutover.")
+	r.c.Println("      " + ui.Bold + "systemctl stop monad-bft monad-execution monad-rpc" + ui.Reset)
+	r.c.Blank()
+	ans, err := r.c.Ask("type STOPPED to confirm")
+	if err != nil {
+		return err
+	}
+	if ans != "STOPPED" {
+		return ui.Die("Not confirmed — aborting before cutover.")
+	}
+	r.c.OK("Old validator confirmed stopped or offline")
+	return nil
+}
 
 func (r *Run) cutover() error {
 	r.c.Phase(7, PhasesTotal, "CUTOVER")
 	if r.st.Get("swap_done") != "1" {
-		host, _ := os.Hostname()
-		seq := r.selfSeq
-		if seq == "" {
-			seq = r.newSeq
-		}
-		ben := r.beneficiary
-		if ben == "" {
-			ben = "not set"
-		}
-		r.c.Blank()
-		r.c.Println("┌─ PROMOTION SUMMARY ────────────────────────────────────────")
-		r.c.Printf("│  %-12s %s\n", "hostname", host)
-		r.c.Printf("│  %-12s %s\n", "network", r.network)
-		r.c.Printf("│  %-12s %s\n", "address", r.selfAddress)
-		r.c.Printf("│  %-12s %s\n", "seq_num", seq)
-		r.c.Printf("│  %-12s %s\n", "beneficiary", ben)
-		r.c.Printf("│  %-12s %s\n", "secp", truncate24(r.secpPub))
-		r.c.Printf("│  %-12s %s\n", "bls", truncate24(r.blsPub))
-		r.c.Println("└────────────────────────────────────────────────────────────")
-		r.c.Blank()
-
-		r.c.Warn("Stop the old validator before confirming cutover.")
-		r.c.Println("      " + ui.Bold + "systemctl stop monad-bft monad-execution monad-rpc" + ui.Reset)
-		r.c.Blank()
-		ans, err := r.c.Ask("type STOPPED to confirm")
-		if err != nil {
+		if err := r.confirmPlan(); err != nil {
 			return err
-		}
-		if ans != "STOPPED" {
-			return ui.Die("Not confirmed — aborting before cutover.")
-		}
-		r.c.OK("Old validator confirmed stopped or offline")
-
-		r.c.Blank()
-		r.c.Println("  Preparation is complete. Confirm when you are ready to begin the switch.")
-		r.c.Println("  The tool will verify the prepared files, replace the identity and start services.")
-		r.c.Blank()
-		if !r.c.ConfirmYN("proceed with cutover?") {
-			return ui.Die("Aborted.")
 		}
 
 		// Every file must still match the checksum recorded when it was

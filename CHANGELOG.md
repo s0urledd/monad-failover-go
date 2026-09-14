@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.2.0 — 2026-09-14
+
+Plan and apply. The per-step questions are gone; one plan is shown and
+confirmed before the switch.
+
+- `--beneficiary`, `--node-name` and `--seq` give the inputs on the command
+  line; whatever is missing is asked for. Flags are validated before the run
+  starts and never skip a confirmation.
+- Phase 7 shows the plan: hostname, network, public IP, address and ports,
+  both public keys in full, what the Foundation snapshot knows about them,
+  sequence, beneficiary and node name, each with where it came from (flag,
+  entered, kept from node.toml, suggested by the snapshot). Then
+  `proceed with this plan?` and `STOPPED`. The separate key, beneficiary and
+  `proceed with cutover?` questions are removed.
+- Rejecting the plan removes the staged files and the run state; the node is
+  untouched and the next run starts clean. Once a cutover has begun, a
+  rejection changes nothing and points at `--resume` and the identity backup.
+- `--resume` shows the plan again, from the recorded state.
+- The plan names the validator the snapshot lists for these keys. Keys the
+  snapshot does not list, or a BLS key that differs from the listed entry,
+  are warned about as a likely wrong backup. Snapshot names are stripped of
+  control characters before they are printed.
+- A `--public-ip` that differs from the address the host reports is warned
+  about at signing and in the plan. On a resume after signing, a new
+  `--public-ip` is reported as ignored.
+- Tests for each item; the flow tests follow the new prompt order.
+
 ## 0.1.1 — 2026-09-14
 
 Fixes from a code review before testnet validation. No new prompts or flags.

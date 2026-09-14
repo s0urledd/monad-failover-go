@@ -24,11 +24,16 @@ import (
 // PhasesTotal is the number of banners a live run prints.
 const PhasesTotal = 8
 
-// Options are the command-line choices for a live run.
+// Options are the command-line choices for a live run. Every input can be
+// given as a flag; whatever is missing is asked for. Flags never skip a
+// confirmation: the plan and the STOPPED gate are always asked.
 type Options struct {
 	Resume       bool
 	KeySourceDir string // --backup-dir; "" asks, "-" means manual IKM entry
 	PublicIP     string // --public-ip override
+	Beneficiary  string // --beneficiary, validated by the caller
+	NodeName     string // --node-name, validated by the caller
+	Seq          string // --seq, validated by the caller
 	Version      string
 	Argv0        string // how the tool was invoked, for "re-run with" hints
 }
@@ -59,6 +64,19 @@ type Run struct {
 	foundKnown    bool
 	verifyPending bool
 	cachedIP      string
+	detectedIP    string // what the host reports, for comparison with --public-ip
+	nodeName      string
+
+	// what the Foundation snapshot said about the imported keys, for the plan
+	snapshotStatus string // found, no-record, not-listed, bls-mismatch, unavailable
+	snapshotName   string
+	snapshotNote   string
+
+	// where each value came from, for the plan
+	ipSource   string
+	benSource  string
+	seqSource  string
+	nameSource string
 
 	// injectable clocks for the test suite
 	sleep func(time.Duration)
@@ -184,6 +202,13 @@ func (r *Run) Promote() error {
 			r.ip, r.selfAddress, r.selfSig = res.IP, res.SelfAddress, res.SelfSig
 			r.selfSeq, r.selfAuthPort = res.SelfSeq, res.SelfAuthPort
 			r.beneficiary, r.backupDir = res.Beneficiary, res.BackupDir
+			r.nodeName, r.detectedIP = res.NodeName, res.DetectedIP
+			r.ipSource, r.benSource, r.seqSource, r.nameSource = res.IPSource, res.BenSource, res.SeqSource, res.NameSource
+			r.snapshotStatus, r.snapshotName, r.snapshotNote = res.SnapshotStatus, res.SnapshotName, res.SnapshotNote
+			if res.SnapshotSeq != "" {
+				r.foundSeq, _ = strconv.ParseUint(res.SnapshotSeq, 10, 64)
+				r.foundKnown = true
+			}
 		}
 	}
 
@@ -322,28 +347,31 @@ func (r *Run) detectNetwork() error {
 }
 
 // publicIP is the --public-ip override if given, otherwise the address
-// detected over HTTPS, remembered for the rest of the run.
+// detected over HTTPS, remembered for the rest of the run. With an override
+// the host's own answer is still fetched once, so the plan can show a
+// mismatch; it never replaces the operator's value.
 func (r *Run) publicIP() string {
-	if r.opt.PublicIP != "" {
-		return r.opt.PublicIP
-	}
 	if r.cachedIP == "" {
 		r.cachedIP = netinfo.DetectPublicIPv4(r.p.IPURL)
+		r.detectedIP = r.cachedIP
 	}
+	if r.opt.PublicIP != "" {
+		r.ipSource = "flag"
+		return r.opt.PublicIP
+	}
+	r.ipSource = "detected"
 	return r.cachedIP
 }
 
+// locationGuard shows where the run is happening. The confirmation comes
+// with the plan, once every value is known.
 func (r *Run) locationGuard() error {
 	host, _ := os.Hostname()
 	r.c.Blank()
-	r.c.Warn("This will " + ui.Bold + "promote this full node to validator" + ui.Reset + ".")
+	r.c.Println("  This will " + ui.Bold + "promote this full node to validator" + ui.Reset + ".")
 	r.c.Println("  Hostname:  " + ui.Bold + host + ui.Reset)
 	if ip := r.publicIP(); ip != "" {
 		r.c.Println("  Public IP: " + ui.Bold + ip + ui.Reset)
-	}
-	r.c.Blank()
-	if !r.c.ConfirmYN("is this the correct target host?") {
-		return ui.Die("Aborted.")
 	}
 	return nil
 }
@@ -494,10 +522,7 @@ func (r *Run) importKeys() error {
 	r.c.Println("  SECP: " + ui.Bold + r.secpPub + ui.Reset)
 	r.c.Println("  BLS:  " + ui.Bold + r.blsPub + ui.Reset)
 	r.c.Blank()
-	if !r.c.ConfirmYN("do these match your validator keys?") {
-		return ui.Die("Key mismatch — aborting.")
-	}
-	r.c.OK("Keys verified")
+	r.c.OK("Keys imported to staging; confirm them in the plan")
 
 	// Bind the confirmed keys to their bytes now. Cutover re-checks these and
 	// refuses anything that changed after this confirmation.
@@ -517,56 +542,111 @@ func (r *Run) importKeys() error {
 
 // ── phase 5: beneficiary, node name, sequence, flags (staging copy) ──
 
+// Every input here can come from a flag; whatever is missing is asked for.
+// Nothing is confirmed one value at a time: the plan at cutover shows them
+// all, with where each came from, and takes the one answer.
+
 func (r *Run) configure() error {
 	r.c.Phase(5, PhasesTotal, "CONFIGURE VALIDATOR")
 	r.c.Println("  All changes go to a staging copy (node.toml.new).")
 	r.c.Println("  The live config is untouched until cutover.")
 
-	// Never touch the live node.toml before cutover. An abort at the STOPPED
-	// gate must leave a fully unmodified full node behind.
+	// Never touch the live node.toml before cutover. An abort at the plan or
+	// the STOPPED gate must leave a fully unmodified full node behind.
 	if err := place.CopyPreserve(r.p.NodeToml, r.d.TomlNew); err != nil {
 		return ui.Die("Could not copy " + r.p.NodeToml + " to staging")
 	}
 
-	r.c.Blank()
-	// The value already in the config is shown and, if kept, validated. An
-	// absent value is not an error here: the operator can type one. A key
-	// that appears more than once is: the staged edit could not be unique.
-	cur, readErr := nodeconf.ReadValue(r.d.TomlNew, "beneficiary", "")
+	if err := r.chooseBeneficiary(); err != nil {
+		return err
+	}
+	if err := r.chooseNodeName(); err != nil {
+		return err
+	}
+	if err := r.chooseSeq(); err != nil {
+		return err
+	}
+
+	for _, e := range []struct{ k, v, sec string }{
+		{"enable_publisher", "true", "fullnode_raptorcast"},
+		{"enable_client", "true", "fullnode_raptorcast"},
+		{"expand_to_group", "true", "statesync"},
+	} {
+		if err := nodeconf.SetTomlValue(r.d.TomlNew, e.k, e.v, e.sec); err != nil {
+			return err
+		}
+	}
+	r.verifyConfigFlags(r.d.TomlNew)
+
+	snapshotSeq := ""
+	if r.foundKnown {
+		snapshotSeq = strconv.FormatUint(r.foundSeq, 10)
+	}
+	for _, kv := range [][2]string{
+		{"beneficiary", r.beneficiary},
+		{"ben_source", r.benSource},
+		{"node_name", r.nodeName},
+		{"name_source", r.nameSource},
+		{"new_seq", r.newSeq},
+		{"seq_source", r.seqSource},
+		{"snapshot_status", r.snapshotStatus},
+		{"snapshot_name", r.snapshotName},
+		{"snapshot_seq", snapshotSeq},
+		{"snapshot_note", r.snapshotNote},
+		{"last_step", "5"},
+	} {
+		if err := r.st.Set(kv[0], kv[1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// readUnique returns the root-level value of key in the staged config, or
+// "" when it is absent. An absent value is not an error: the operator can
+// supply one. A key that appears more than once is: the staged edit could
+// not be unique.
+func (r *Run) readUnique(key string) (string, error) {
+	cur, err := nodeconf.ReadValue(r.d.TomlNew, key, "")
 	switch {
-	case errors.Is(readErr, nodeconf.ErrMissing):
-		cur = ""
-	case readErr != nil:
-		return ui.Die("Cannot read an unambiguous beneficiary from node.toml.",
+	case errors.Is(err, nodeconf.ErrMissing):
+		return "", nil
+	case err != nil:
+		return "", ui.Die("Cannot read an unambiguous "+key+" from node.toml.",
 			"It appears more than once or is not a plain string. Fix the config and re-run.")
 	}
-	r.c.Println(ui.Bold + "BENEFICIARY" + ui.Reset)
-	r.c.Println("Enter the beneficiary address from the old validator's node.toml.")
-	r.c.Println("Leave blank to keep the address already in this node's config:")
-	shown := cur
-	if shown == "" {
-		shown = "(none set)"
+	return cur, nil
+}
+
+func orNone(v string) string {
+	if v == "" {
+		return "(none set)"
 	}
-	r.c.Println("    " + ui.Bold + shown + ui.Reset)
-	ben, err := r.c.Ask("beneficiary")
+	return v
+}
+
+func (r *Run) chooseBeneficiary() error {
+	r.c.Blank()
+	cur, err := r.readUnique("beneficiary")
 	if err != nil {
 		return err
 	}
+	ben := r.opt.Beneficiary
 	if ben != "" {
-		if !nodeconf.BeneficiaryRe.MatchString(ben) {
-			return ui.Die("beneficiary must be a 0x-prefixed 40-hex-character address")
-		}
-		if err := nodeconf.SetTomlValue(r.d.TomlNew, "beneficiary", `"`+ben+`"`, ""); err != nil {
+		r.benSource = "flag"
+	} else {
+		r.c.Println(ui.Bold + "BENEFICIARY" + ui.Reset)
+		r.c.Println("Enter the beneficiary address from the old validator's node.toml.")
+		r.c.Println("Leave blank to keep the address already in this node's config:")
+		r.c.Println("    " + ui.Bold + orNone(cur) + ui.Reset)
+		if ben, err = r.c.Ask("beneficiary"); err != nil {
 			return err
 		}
-		r.c.OK("Beneficiary: " + ben)
-		if nodeconf.ZeroAddressRe.MatchString(ben) {
-			r.c.Warn("You entered the ZERO address. This validator will have no beneficiary set.")
-		}
-		r.beneficiary = ben
-	} else {
-		// Blank means "keep what is there", so show exactly what that is and
-		// get a yes for it. Rewards go to this address.
+		r.benSource = "entered"
+	}
+	if ben == "" {
+		// Blank keeps what is there. Rewards go to this address, so it has
+		// to exist and be an address; the plan shows it as kept.
 		if cur == "" {
 			return ui.Die("No beneficiary given and none set in the config.",
 				"Re-run and enter the validator's beneficiary address.")
@@ -575,71 +655,120 @@ func (r *Run) configure() error {
 			return ui.Die("The beneficiary already in the config is not a 0x-prefixed 40-hex-character address.",
 				"Re-run and enter the validator's beneficiary address.")
 		}
-		if nodeconf.ZeroAddressRe.MatchString(cur) {
+		ben = cur
+		r.benSource = "kept from node.toml"
+	} else {
+		if !nodeconf.BeneficiaryRe.MatchString(ben) {
+			return ui.Die("beneficiary must be a 0x-prefixed 40-hex-character address")
+		}
+		if err := nodeconf.SetTomlValue(r.d.TomlNew, "beneficiary", `"`+ben+`"`, ""); err != nil {
+			return err
+		}
+	}
+	r.beneficiary = ben
+	r.c.OK("Beneficiary: " + ben + " (" + r.benSource + ")")
+	if nodeconf.ZeroAddressRe.MatchString(ben) {
+		switch r.benSource {
+		case "kept from node.toml":
 			r.c.Warn("The address already in the config is the ZERO address.")
 			r.c.Println("  Keeping it means this validator has no beneficiary set.")
+		case "flag":
+			r.c.Warn("--beneficiary is the ZERO address. This validator will have no beneficiary set.")
+		default:
+			r.c.Warn("You entered the ZERO address. This validator will have no beneficiary set.")
 		}
-		r.c.Println("  Keeping: " + ui.Bold + cur + ui.Reset)
-		if !r.c.ConfirmYN("keep this beneficiary?") {
-			return ui.Die("Aborted — re-run and enter the beneficiary address you want.")
-		}
-		r.beneficiary = cur
-		r.c.OK("Beneficiary kept: " + cur)
 	}
+	return nil
+}
 
+func (r *Run) chooseNodeName() error {
 	r.c.Blank()
-	r.c.Println(ui.Bold + "NODE NAME" + ui.Reset)
-	r.c.Println("Per the migration docs, this node should take over the old validator's")
-	r.c.Println("node_name during migration. Leave empty to keep the current name.")
-	name, err := r.c.Ask("node_name")
+	cur, err := r.readUnique("node_name")
 	if err != nil {
 		return err
 	}
+	name := r.opt.NodeName
 	if name != "" {
-		if !nodeconf.NodeNameRe.MatchString(name) {
-			return ui.Die("node_name may contain only letters, digits, dot, dash, underscore (max 64)")
-		}
-		if err := nodeconf.SetTomlValue(r.d.TomlNew, "node_name", `"`+name+`"`, ""); err != nil {
+		r.nameSource = "flag"
+	} else {
+		r.c.Println(ui.Bold + "NODE NAME" + ui.Reset)
+		r.c.Println("Per the migration docs, this node should take over the old validator's")
+		r.c.Println("node_name during migration. Leave empty to keep the current name:")
+		r.c.Println("    " + ui.Bold + orNone(cur) + ui.Reset)
+		if name, err = r.c.Ask("node_name"); err != nil {
 			return err
 		}
-		r.c.OK("node_name: " + name)
-	} else {
-		r.c.OK("node_name unchanged")
+		r.nameSource = "entered"
 	}
+	if name == "" {
+		// The existing name is shown, never validated: it is the node's own
+		// and stays as it is. Only what is printed is made printable.
+		r.nodeName = ui.Printable(cur)
+		r.nameSource = "kept from node.toml"
+		r.c.OK("node_name unchanged: " + orNone(r.nodeName))
+		return nil
+	}
+	if !nodeconf.NodeNameRe.MatchString(name) {
+		return ui.Die("node_name may contain only letters, digits, dot, dash, underscore (max 64)")
+	}
+	if err := nodeconf.SetTomlValue(r.d.TomlNew, "node_name", `"`+name+`"`, ""); err != nil {
+		return err
+	}
+	r.nodeName = name
+	r.c.OK("node_name: " + name + " (" + r.nameSource + ")")
+	return nil
+}
 
+func (r *Run) chooseSeq() error {
 	r.c.Blank()
 	r.c.Println(ui.Bold + "SEQ NUM" + ui.Reset)
 	r.c.Println("The name record's sequence number must be higher than any value this")
 	r.c.Println("validator identity has used before. Gaps are harmless.")
-	r.c.Blank()
 
 	suggested := ""
 	r.c.Step("FOUNDATION SNAPSHOT")
 	body, fetchErr := foundation.Fetch(r.p.FoundationBase, r.network)
 	res, note := foundation.Lookup(body, fetchErr, r.network, r.secpPub, r.blsPub, r.p.FoundationMaxAge, r.now())
+	r.snapshotName = res.Name
 	if note == "" {
 		r.foundSeq, r.foundKnown = res.Seq, true
+		r.snapshotStatus = "found"
 		suggested = strconv.FormatUint(res.Seq+1, 10)
 		r.c.OK(fmt.Sprintf("Last published sequence for this key: %s%d%s (%s snapshot, %dh old)",
 			ui.Bold, res.Seq, ui.Reset, r.network, res.AgeHours))
-		r.c.Println("  Suggested for this migration: " + ui.Bold + suggested + ui.Reset)
-		r.c.Println("  Press Enter to use it, or type a higher number if you know of a later one.")
+		if res.Name != "" {
+			r.c.Println("  The snapshot lists these keys as: " + ui.Bold + res.Name + ui.Reset)
+		}
+		if r.opt.Seq == "" {
+			r.c.Println("  Suggested for this migration: " + ui.Bold + suggested + ui.Reset)
+			r.c.Println("  Press Enter to use it, or type a higher number if you know of a later one.")
+		}
 	} else {
 		r.c.Warn("Could not read a sequence from the Foundation snapshot (" + note + ").")
-		r.c.Println("  Enter the value yourself: one higher than the last this identity used.")
-		r.c.Println("  Check your records or the old validator's node.toml.")
+		r.noteSnapshot(note)
+		if r.opt.Seq == "" {
+			r.c.Println("  Enter the value yourself: one higher than the last this identity used.")
+			r.c.Println("  Check your records or the old validator's node.toml.")
+		}
 	}
 
-	label := "new seq_num"
-	if suggested != "" {
-		label += " [" + suggested + "]"
-	}
-	seq, err := r.c.Ask(label)
-	if err != nil {
-		return err
-	}
-	if seq == "" && suggested != "" {
-		seq = suggested
+	seq := r.opt.Seq
+	if seq != "" {
+		r.seqSource = "flag"
+	} else {
+		label := "new seq_num"
+		if suggested != "" {
+			label += " [" + suggested + "]"
+		}
+		var err error
+		if seq, err = r.c.Ask(label); err != nil {
+			return err
+		}
+		r.seqSource = "entered"
+		if seq == "" && suggested != "" {
+			seq = suggested
+			r.seqSource = "suggested by the snapshot"
+		}
 	}
 	if !seqInputRe.MatchString(seq) {
 		return ui.Die("Must be a positive number")
@@ -655,29 +784,35 @@ func (r *Run) configure() error {
 			"Peers would reject the record. Use "+suggested+" or higher.")
 	}
 	r.newSeq = seq
-	r.c.OK("seq_num for this migration: " + seq)
-
-	for _, e := range []struct{ k, v, sec string }{
-		{"enable_publisher", "true", "fullnode_raptorcast"},
-		{"enable_client", "true", "fullnode_raptorcast"},
-		{"expand_to_group", "true", "statesync"},
-	} {
-		if err := nodeconf.SetTomlValue(r.d.TomlNew, e.k, e.v, e.sec); err != nil {
-			return err
-		}
-	}
-	r.verifyConfigFlags(r.d.TomlNew)
-
-	for _, kv := range [][2]string{
-		{"beneficiary", r.beneficiary},
-		{"new_seq", r.newSeq},
-		{"last_step", "5"},
-	} {
-		if err := r.st.Set(kv[0], kv[1]); err != nil {
-			return err
-		}
-	}
+	r.c.OK("seq_num for this migration: " + seq + " (" + r.seqSource + ")")
 	return nil
+}
+
+// noteSnapshot classifies a snapshot note for the plan and warns when it
+// says something about the imported keys. A note about the snapshot itself
+// (unreachable, stale, wrong network) says nothing about the keys.
+func (r *Run) noteSnapshot(note string) {
+	r.snapshotNote = noteCharsRe.ReplaceAllString(note, "")
+	if len(r.snapshotNote) > 120 {
+		r.snapshotNote = r.snapshotNote[:120]
+	}
+	switch note {
+	case foundation.NoteNotListed:
+		r.snapshotStatus = "not-listed"
+		r.c.Warn("These keys are not in the Foundation snapshot for " + r.network + ".")
+		r.c.Println("  That is expected for a validator outside the active set. If this")
+		r.c.Println("  validator is active, check that the backups belong to it.")
+	case foundation.NoteNoRecord:
+		r.snapshotStatus = "no-record"
+		r.c.Println("  The snapshot lists these keys without a name record, which is")
+		r.c.Println("  usual for a validator outside the active set.")
+	case foundation.NoteBLSMismatch:
+		r.snapshotStatus = "bls-mismatch"
+		r.c.Warn("The snapshot entry for this SECP key carries a different BLS key.")
+		r.c.Println("  Check that bls-backup belongs to the same validator as secp-backup.")
+	default:
+		r.snapshotStatus = "unavailable"
+	}
 }
 
 func (r *Run) verifyConfigFlags(file string) {
@@ -703,7 +838,11 @@ func (r *Run) signRecord() error {
 		return ui.Die("Could not detect a valid public IPv4 address.",
 			"Retry with: "+r.opt.Argv0+" --resume --public-ip <this-server-public-IPv4>")
 	}
-	r.c.OK("Public IP: " + r.ip)
+	r.c.OK("Public IP: " + r.ip + " (" + r.ipSource + ")")
+	if r.opt.PublicIP != "" && r.detectedIP != "" && r.detectedIP != r.ip {
+		r.c.Warn("--public-ip " + r.ip + " differs from the address this host reports: " + r.detectedIP)
+		r.c.Println("  The name record will carry " + r.ip + ". Peers must reach this node there.")
+	}
 
 	if err := nodeconf.SanitizePlaceholders(r.d.TomlNew); err != nil {
 		return err
@@ -750,6 +889,8 @@ func (r *Run) signRecord() error {
 
 	for _, kv := range [][2]string{
 		{"ip", r.ip},
+		{"ip_source", r.ipSource},
+		{"detected_ip", r.detectedIP},
 		{"self_address", r.selfAddress},
 		{"self_sig", r.selfSig},
 		{"self_seq", r.selfSeq},
