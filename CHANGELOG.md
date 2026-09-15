@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.3 — 2026-09-15
+
+Checked against the official migration procedure step by step; the flow
+matches it. Two small things it did not cover:
+
+- `/home/monad/pubkey-secp-bls`, the public-key listing the install guide
+  keeps, is rewritten after the key export with the validator's keys in the
+  guide's format. The node does not read it; a stale copy only misleads.
+  Best effort: a failure is a warning.
+- README: validated with Monad 0.16.x and the signer flags it needs; the
+  old server must not come back with the validator's `node_name`; the
+  uninstall section says what is under `/var/lib/monad-failover/`.
+
 ## 0.4.2 — 2026-09-15
 
 - Public IP detection works again: the root of `ifconfig.me` answers a Go

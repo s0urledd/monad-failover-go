@@ -442,6 +442,7 @@ func (r *Run) verify() error {
 			"copies are preserved as *.bak in "+r.p.BackupRoot+".",
 			"Retry just this export with: "+r.opt.Argv0+" --resume")
 	}
+	r.refreshPubkeyList()
 	if !r.verifyPending {
 		return r.st.Set("last_step", "8")
 	}
@@ -630,6 +631,74 @@ func (r *Run) refreshKeyBackups() error {
 	r.c.Warn("Store copies of both files OUTSIDE this server (password manager / vault).")
 	r.c.Println("  These files contain unencrypted secret keys. Anyone holding them can use this identity.")
 	return nil
+}
+
+// refreshPubkeyList rewrites the public-key listing the install guide keeps
+// at /home/monad/pubkey-secp-bls with the "public key" lines of the fresh
+// exports, in the guide's grep format. The node does not read it; a stale
+// copy only misleads whoever does. Best effort: a failure is a warning.
+func (r *Run) refreshPubkeyList() {
+	fail := func(why string) { r.c.Warn("pubkey-secp-bls not refreshed: " + why) }
+	var lines []string
+	for _, f := range []string{filepath.Join(r.p.BackupRoot, "secp-backup"), filepath.Join(r.p.BackupRoot, "bls-backup")} {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			fail(err.Error())
+			return
+		}
+		for _, l := range strings.Split(string(data), "\n") {
+			if strings.Contains(strings.ToLower(l), "public key") {
+				lines = append(lines, f+":"+strings.TrimRight(l, "\r"))
+			}
+		}
+		ui.Zero(data)
+	}
+	if len(lines) != 2 {
+		fail("public key lines not found in the exports")
+		return
+	}
+	uid, gid, err := r.placementOwner()
+	if err != nil {
+		fail(err.Error())
+		return
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(r.p.PubkeyList), ".pubkey-secp-bls.*")
+	if err != nil {
+		fail(err.Error())
+		return
+	}
+	name := tmp.Name()
+	if _, err := tmp.WriteString(strings.Join(lines, "\n") + "\n"); err != nil {
+		tmp.Close()
+		os.Remove(name)
+		fail(err.Error())
+		return
+	}
+	if err := tmp.Chmod(0o644); err == nil {
+		err = tmp.Chown(uid, gid)
+	}
+	if err != nil {
+		tmp.Close()
+		os.Remove(name)
+		fail(err.Error())
+		return
+	}
+	if err := tmp.Sync(); err == nil {
+		err = tmp.Close()
+	}
+	if err != nil {
+		os.Remove(name)
+		fail(err.Error())
+		return
+	}
+	// rename replaces whatever is at the path, symlink included, without
+	// following it
+	if err := os.Rename(name, r.p.PubkeyList); err != nil {
+		os.Remove(name)
+		fail(err.Error())
+		return
+	}
+	r.c.OK("Public key listing refreshed: " + r.p.PubkeyList)
 }
 
 // ── done ─────────────────────────────────────────────────────────────

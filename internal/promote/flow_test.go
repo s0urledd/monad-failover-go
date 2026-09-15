@@ -2008,3 +2008,29 @@ func TestDryRunWarnsWhenTheAddressCannotBeDetected(t *testing.T) {
 	}
 	expect(t, out, "could not detect the public IPv4 address; the run will ask for it, or pass --public-ip", "Preflight passed")
 }
+
+// The install guide's public-key listing is rewritten with the validator's
+// keys after the export, in the guide's grep format, replacing the full
+// node's stale listing.
+func TestPubkeyListingRefreshedAfterExport(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	os.WriteFile(h.p.PubkeyList, []byte("/opt/monad/backup/secp-backup:Secp public key: 02oldfullnode\n"), 0o644)
+	code, out := h.normalRun()
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	expect(t, out, "Public key listing refreshed: "+h.p.PubkeyList)
+	got := h.read(h.p.PubkeyList)
+	want := h.p.BackupRoot + "/secp-backup:Secp public key: " + testutil.MockSecp + "\n" +
+		h.p.BackupRoot + "/bls-backup:BLS public key: " + testutil.MockBls + "\n"
+	if got != want {
+		t.Errorf("listing:\n%s\nwant:\n%s", got, want)
+	}
+	if strings.Contains(got, testutil.SecpIKM) || strings.Contains(got, testutil.BlsIKM) {
+		t.Error("a secret reached the public key listing")
+	}
+	if fi, _ := os.Stat(h.p.PubkeyList); fi.Mode().Perm() != 0o644 {
+		t.Errorf("listing mode %v", fi.Mode())
+	}
+}

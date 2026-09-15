@@ -10,7 +10,7 @@ Use it for a planned migration or recovery when the old server is unavailable.
 It runs on the target full node using your validator key backups, with no
 connection to the old server required.
 
-0.4.2 is under validation on testnet. Do not use it on a mainnet validator
+0.4.3 is under validation on testnet. Do not use it on a mainnet validator
 before 1.0.
 
 ## How it works
@@ -58,8 +58,8 @@ On the target full node, as root. The checksum is verified before the
 binary is installed:
 
 ```bash
-curl -fsSLO https://github.com/s0urledd/monad-failover-go/releases/download/v0.4.2/monad-failover &&
-echo "878e76ea417b82d3a950801731ebfe095f1488ab05e39e96f31a9f8954ab9b2a  monad-failover" | sha256sum -c - &&
+curl -fsSLO https://github.com/s0urledd/monad-failover-go/releases/download/v0.4.3/monad-failover &&
+echo "a0d5f3bb0bd602c0ee75aad361c7c0431821dc3a60ff487ae56c1cc9ba6f833f  monad-failover" | sha256sum -c - &&
 install -m 755 monad-failover /usr/local/bin/monad-failover
 ```
 
@@ -67,7 +67,7 @@ To build from source, install Go 1.24.7 or later and run:
 
 ```bash
 git clone https://github.com/s0urledd/monad-failover-go
-cd monad-failover-go && git checkout v0.4.2
+cd monad-failover-go && git checkout v0.4.3
 CGO_ENABLED=0 go build -o monad-failover ./cmd/monad-failover
 install -m 755 monad-failover /usr/local/bin/monad-failover
 ```
@@ -116,8 +116,10 @@ server. See [recovery](docs/recovery.md) if resume cannot finish.
 
 ## Compatibility and operator notes
 
-Maintained to track Monad updates. The tool targets standard P2P ports:
-TCP/UDP `8000` and authenticated UDP `8001`. Custom P2P ports are not supported.
+Maintained to track Monad updates. Validated with Monad 0.16.x; the signer's
+`--ip`, `--tcp-port` and `--udp-port` flags (0.16 and later) are required.
+The tool targets standard P2P ports: TCP/UDP `8000` and authenticated UDP
+`8001`. Custom P2P ports are not supported.
 
 - Block public access to RPC and metrics ports (8080, 8081, 9143, etc.).
   Allow trusted sources only.
@@ -125,6 +127,10 @@ TCP/UDP `8000` and authenticated UDP `8001`. Custom P2P ports are not supported.
   on the target and check its firewall.
 - Update downstream peers with the new name record. Transfer any custom
   dedicated-full-node configuration separately; the tool edits the target's config.
+- The old server must not run with the validator identity again. When it
+  returns as a full node, give it its own `node_name`; the official
+  [restoration procedure](https://docs.monad.xyz/node-ops/node-recovery/node-migration#restoring-the-original-validator)
+  covers moving the validator back.
 
 [SECURITY.md](SECURITY.md) explains key handling and external requests, including
 the optional monval uptime lookup operated by Huginn.
@@ -132,6 +138,8 @@ the optional monval uptime lookup operated by Huginn.
 ## Uninstall
 
 After verification, `sudo rm -- /usr/local/bin/monad-failover` removes the tool.
-Monad, backups and logs stay in place. Keep the backups for recovery.
+Everything it wrote is under `/var/lib/monad-failover/`: the run state, logs,
+the identity backup and the re-exported key backups. Copy the key backups
+off-server before removing that directory.
 
 [MIT licensed](LICENSE).
