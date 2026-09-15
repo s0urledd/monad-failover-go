@@ -146,7 +146,8 @@ func (r *Run) Prepare() (proceed bool, lock *state.RunLock, err error) {
 
 func (r *Run) startLog() error {
 	if err := place.PrivateDir(r.p.LogDir); err != nil {
-		return ui.Die("Cannot use log directory "+r.p.LogDir, err.Error())
+		return ui.Die("Cannot use log directory "+r.p.LogDir+".", err.Error(),
+			"Or point LOG_DIR at a root-only directory. Nothing has been changed.")
 	}
 	f, err := os.CreateTemp(r.p.LogDir, "failover-"+r.now().Format("20060102-150405")+"-*.log")
 	if err != nil {
@@ -456,7 +457,8 @@ func (r *Run) locationGuard() error {
 // encryption.
 func (r *Run) backupConfig() error {
 	if err := place.PrivateDir(r.p.BackupRoot); err != nil {
-		return err
+		return ui.Die("Cannot use backup directory "+r.p.BackupRoot+".", err.Error(),
+			"Or point BACKUP_ROOT at a root-only directory. Nothing has been changed.")
 	}
 	var err error
 	r.backupDir, err = os.MkdirTemp(r.p.BackupRoot, "failover-"+r.now().Format("20060102-150405")+"-")

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.2 — 2026-09-15
+
+- The dry run checks the backup and log roots the way the live run does:
+  a symlink, a foreign owner or a directory other users can write to
+  anywhere above them is a blocking finding, reported with the directory,
+  its mode and the fix. The live run's refusal names the same fix and the
+  environment variable that points elsewhere. On a standard install this
+  is `/opt/monad` left group- or world-writable.
+
 ## 0.3.1 — 2026-09-15
 
 Two adjustments to the RPC sync check, released so the README on main

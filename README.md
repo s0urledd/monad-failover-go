@@ -10,7 +10,7 @@ Use it for a planned migration or recovery when the old server is unavailable.
 It runs on the target full node using your validator key backups, with no
 connection to the old server required.
 
-0.3.1 is under validation on testnet. Do not use it on a mainnet validator
+0.3.2 is under validation on testnet. Do not use it on a mainnet validator
 before 1.0.
 
 ## How it works
@@ -57,8 +57,8 @@ On the target full node, as root. The checksum is verified before the
 binary is installed:
 
 ```bash
-curl -fsSLO https://github.com/s0urledd/monad-failover-go/releases/download/v0.3.1/monad-failover &&
-echo "9a9f7794b68f4872bd83013b833c0494ad69c575b1e889e2b4976c0ca0c85343  monad-failover" | sha256sum -c - &&
+curl -fsSLO https://github.com/s0urledd/monad-failover-go/releases/download/v0.3.2/monad-failover &&
+echo "a230c10e47ec7d3bb46599832847d01acdb8ae6a3e4c0dfc8bb2fa5ca621f8d1  monad-failover" | sha256sum -c - &&
 install -m 755 monad-failover /usr/local/bin/monad-failover
 ```
 
@@ -66,7 +66,7 @@ To build from source, install Go 1.24.7 or later and run:
 
 ```bash
 git clone https://github.com/s0urledd/monad-failover-go
-cd monad-failover-go && git checkout v0.3.1
+cd monad-failover-go && git checkout v0.3.2
 CGO_ENABLED=0 go build -o monad-failover ./cmd/monad-failover
 install -m 755 monad-failover /usr/local/bin/monad-failover
 ```
@@ -118,6 +118,10 @@ server. See [recovery](docs/recovery.md) if resume cannot finish.
 Maintained to track Monad updates. The tool targets standard P2P ports:
 TCP/UDP `8000` and authenticated UDP `8001`. Custom P2P ports are not supported.
 
+- `/opt/monad` must be root-owned and not writable by other users (mode
+  `755`): backups and logs go under it, and a directory another account
+  could swap is refused. `chmod g-w,o-w /opt/monad` leaves its
+  subdirectories as they are.
 - Block public access to RPC and metrics ports (8080, 8081, 9143, etc.).
   Allow trusted sources only.
 - Configure [VDP metrics](https://docs.monad.xyz/node-ops/validator-delegation-program)

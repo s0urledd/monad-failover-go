@@ -8,6 +8,7 @@ import (
 	"github.com/s0urledd/monad-failover-go/internal/monad"
 	"github.com/s0urledd/monad-failover-go/internal/nodeconf"
 	"github.com/s0urledd/monad-failover-go/internal/paths"
+	"github.com/s0urledd/monad-failover-go/internal/place"
 	"github.com/s0urledd/monad-failover-go/internal/rpcports"
 	"github.com/s0urledd/monad-failover-go/internal/rpcsync"
 	"github.com/s0urledd/monad-failover-go/internal/ui"
@@ -82,6 +83,19 @@ func DryRun(c *ui.Console, p paths.Paths, keySourceDir, version string) int {
 	} else {
 		c.Cross("missing: " + p.EnvFile)
 		fails++
+	}
+
+	c.Step("DIRECTORIES")
+	for _, d := range []struct{ label, path, env string }{
+		{"backups", p.BackupRoot, "BACKUP_ROOT"}, {"logs", p.LogDir, "LOG_DIR"},
+	} {
+		if err := place.PrivateDirCheck(d.path); err != nil {
+			c.Cross(d.label + ": " + err.Error())
+			c.Println("  Or point " + d.env + " at a root-only directory.")
+			fails++
+		} else {
+			c.OK(d.label + ": " + d.path)
+		}
 	}
 
 	c.Step("SYNC STATUS")

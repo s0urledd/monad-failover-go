@@ -1921,3 +1921,33 @@ func TestRPCAfterCutoverPendingThenResumeConfirms(t *testing.T) {
 		t.Error("state kept after confirmed sync")
 	}
 }
+
+// A backup or log root under a directory other accounts can write to is
+// found by the dry run, before a live run stops at its first write.
+func TestWritableAncestorIsFoundByTheDryRun(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	optMonad := filepath.Join(h.root, "opt", "monad")
+	if err := os.Chmod(optMonad, 0o775); err != nil {
+		t.Fatal(err)
+	}
+	code, out := h.dryRun(h.p.BackupRoot)
+	if code != 1 {
+		t.Fatalf("dry run exit %d:\n%s", code, out)
+	}
+	expect(t, out, "backups: "+optMonad+" is writable by other users (mode 775)", "Fix: chmod g-w,o-w "+optMonad,
+		"Or point BACKUP_ROOT at a root-only directory.", "logs: "+optMonad+" is writable by other users", "Preflight failed")
+	code, out = h.normalRun()
+	if code != 1 {
+		t.Fatalf("live exit %d:\n%s", code, out)
+	}
+	expect(t, out, "Cannot use log directory", "chmod g-w,o-w "+optMonad, "Or point LOG_DIR at a root-only directory. Nothing has been changed.")
+	h.assertServicesUntouched()
+	if h.stateExists() {
+		t.Error("state written")
+	}
+	os.Chmod(optMonad, 0o700)
+	if code, out := h.dryRun(h.p.BackupRoot); code != 0 || !strings.Contains(out, "backups: "+h.p.BackupRoot) {
+		t.Fatalf("after the fix: exit %d:\n%s", code, out)
+	}
+}
