@@ -1836,14 +1836,14 @@ func TestWithoutMonadStatusSyncIsJudgedOverRPC(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
-	expect(t, out, "Node: in-sync via RPC (local head", "advancing)", "Node is in-sync via RPC", "VALIDATOR PROMOTION COMPLETE")
-	reject(t, out, "continue without sync check?", "monad-status not installed")
+	expect(t, out, "Node: in-sync (block difference: 3)", "Node is in-sync", "VALIDATOR PROMOTION COMPLETE")
+	reject(t, out, "continue without sync check?", "monad-status not installed", "via RPC")
 	// the dry run says the same, with one line about the missing tool
 	code, out = h.dryRun(h.p.BackupRoot)
 	if code != 0 {
 		t.Fatalf("dry run exit %d:\n%s", code, out)
 	}
-	expect(t, out, "monad-status not installed; sync is checked over RPC instead", "in-sync via RPC (local head", "Preflight passed")
+	expect(t, out, "monad-status not installed; sync is checked over RPC instead", "in-sync (block difference:", "Preflight passed")
 	reject(t, out, "manual confirmation", "cannot verify sync without monad-status")
 }
 
@@ -1905,7 +1905,7 @@ func TestRPCAfterCutoverPendingThenResumeConfirms(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
-	expect(t, out, "Node: in-sync via RPC", "Sync not confirmed via RPC after 0s: local RPC did not answer eth_chainId",
+	expect(t, out, "Node: in-sync (block difference:", "Sync not confirmed via RPC after 0s: local RPC did not answer eth_chainId",
 		"CUTOVER COMPLETE — VERIFICATION PENDING", "Key backups exported")
 	reject(t, out, "VALIDATOR PROMOTION COMPLETE")
 	if h.stateValue("last_step") != "7" {
@@ -1916,7 +1916,7 @@ func TestRPCAfterCutoverPendingThenResumeConfirms(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("resume exit %d:\n%s", code, out)
 	}
-	expect(t, out, "Node is in-sync via RPC", "VALIDATOR PROMOTION COMPLETE")
+	expect(t, out, "Node is in-sync", "VALIDATOR PROMOTION COMPLETE")
 	if h.stateExists() {
 		t.Error("state kept after confirmed sync")
 	}

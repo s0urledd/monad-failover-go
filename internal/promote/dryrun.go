@@ -105,7 +105,7 @@ func DryRun(c *ui.Console, p paths.Paths, keySourceDir, version string) int {
 	} else {
 		switch res := rpcsync.Verify(cfg); res.Verdict {
 		case rpcsync.InSync:
-			c.OK("in-sync via RPC (" + res.Detail + ")")
+			c.OK(fmt.Sprintf("in-sync (block difference: %d)", res.Behind))
 		case rpcsync.NotInSync:
 			c.Cross("node is not in sync: " + res.Detail)
 			fails++

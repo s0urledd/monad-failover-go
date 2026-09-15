@@ -350,7 +350,7 @@ func (r *Run) checkSync() error {
 	res := rpcsync.Verify(cfg)
 	switch res.Verdict {
 	case rpcsync.InSync:
-		r.c.OK("Node: in-sync via RPC (" + res.Detail + ")")
+		r.c.OK(fmt.Sprintf("Node: in-sync (block difference: %d)", res.Behind))
 		return nil
 	case rpcsync.NotInSync:
 		return ui.Die("Node is not in sync: "+res.Detail+".", "Must be fully synced before promotion.")

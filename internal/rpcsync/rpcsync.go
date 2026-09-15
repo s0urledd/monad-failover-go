@@ -37,12 +37,14 @@ const (
 	InSync                    // compared, and the node keeps up with the network
 )
 
-// Result carries the verdict and the numbers behind it.
+// Result carries the verdict and the numbers behind it. Detail explains a
+// verdict that is not InSync; an in-sync node needs only Behind.
 type Result struct {
 	Verdict   Verdict
 	Detail    string // one line, for the operator
 	LocalHead uint64
 	NetHead   uint64
+	Behind    uint64 // blocks the local head trails the network head, 0 when level or ahead
 }
 
 // Config is one check.
@@ -130,12 +132,10 @@ func Verify(c Config) Result {
 		res.Detail = fmt.Sprintf("local head %d is ahead of every public RPC (%d); cannot compare", second, net)
 	default:
 		res.Verdict = InSync
-		switch {
-		case second >= net:
-			res.Detail = fmt.Sprintf("local head %d, at the network head (%d), advancing", second, net)
-		default:
-			res.Detail = fmt.Sprintf("local head %d, network head %d, %d behind, advancing", second, net, net-second)
+		if net > second {
+			res.Behind = net - second
 		}
+		res.Detail = fmt.Sprintf("local head %d, network head %d, advancing", second, net)
 	}
 	return res
 }

@@ -32,7 +32,7 @@ func TestNodeAtTheTipReadsLevel(t *testing.T) {
 	defer e.Close()
 	e.Local.Head, e.Ref1.Head, e.Ref2.Head = 1000, 1000, 1000
 	res := check(t, e)
-	if res.Verdict != InSync || !strings.Contains(res.Detail, "at the network head") {
+	if res.Verdict != InSync || res.Behind != 0 {
 		t.Fatalf("%+v", res)
 	}
 }
@@ -52,7 +52,7 @@ func TestSixBlocksBehindIsLag(t *testing.T) {
 	e2 := testutil.NewEndpoints()
 	defer e2.Close()
 	e2.Local.Head, e2.Ref1.Head, e2.Ref2.Head = 1000, 1005, 1005
-	if res := check(t, e2); res.Verdict != InSync || !strings.Contains(res.Detail, "5 behind") {
+	if res := check(t, e2); res.Verdict != InSync || res.Behind != 5 {
 		t.Fatalf("%+v", res)
 	}
 }

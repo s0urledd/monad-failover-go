@@ -517,7 +517,7 @@ func (r *Run) postVerify() error {
 		} else {
 			res := rpcsync.Verify(rpcCfg)
 			if res.Verdict == rpcsync.InSync {
-				r.c.OK("Node is in-sync via RPC (" + res.Detail + ")")
+				r.c.OK("Node is in-sync")
 				return nil
 			}
 			status = res.Detail
