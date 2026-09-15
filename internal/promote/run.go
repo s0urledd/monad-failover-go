@@ -66,6 +66,7 @@ type Run struct {
 	verifyPending bool
 	cachedIP      string
 	detectedIP    string // what the host reports, for comparison with --public-ip
+	enteredIP     string // typed by the operator when detection failed
 	nodeName      string
 
 	// what the Foundation snapshot said about the imported keys, for the plan
@@ -427,15 +428,40 @@ func (r *Run) detectNetwork() error {
 // mismatch; it never replaces the operator's value.
 func (r *Run) publicIP() string {
 	if r.cachedIP == "" {
-		r.cachedIP = netinfo.DetectPublicIPv4(r.p.IPURL)
+		r.cachedIP = netinfo.DetectPublicIPv4(r.p.IPURLs...)
 		r.detectedIP = r.cachedIP
 	}
-	if r.opt.PublicIP != "" {
+	switch {
+	case r.opt.PublicIP != "":
 		r.ipSource = "flag"
 		return r.opt.PublicIP
+	case r.enteredIP != "":
+		r.ipSource = "entered"
+		return r.enteredIP
 	}
 	r.ipSource = "detected"
 	return r.cachedIP
+}
+
+// ensureIP makes sure the run has a public address: the flag, detection,
+// or, when detection fails, the operator. It is asked in phase 2, so a
+// failure surfaces before any key is imported.
+func (r *Run) ensureIP() error {
+	if r.publicIP() != "" {
+		return nil
+	}
+	r.c.Warn("Could not detect this server's public IPv4 address.")
+	r.c.Println("  Enter the address peers reach this node at (or re-run with --public-ip).")
+	ans, err := r.c.Ask("public IPv4")
+	if err != nil {
+		return err
+	}
+	ans = strings.TrimSpace(ans)
+	if !netinfo.ValidIPv4(ans) {
+		return ui.Die("Not a valid IPv4 address: " + ans)
+	}
+	r.enteredIP = ans
+	return nil
 }
 
 // locationGuard shows where the run is happening. The confirmation comes
@@ -445,9 +471,10 @@ func (r *Run) locationGuard() error {
 	r.c.Blank()
 	r.c.Println("  This will " + ui.Bold + "promote this full node to validator" + ui.Reset + ".")
 	r.c.Println("  Hostname:  " + ui.Bold + host + ui.Reset)
-	if ip := r.publicIP(); ip != "" {
-		r.c.Println("  Public IP: " + ui.Bold + ip + ui.Reset)
+	if err := r.ensureIP(); err != nil {
+		return err
 	}
+	r.c.Println("  Public IP: " + ui.Bold + r.publicIP() + ui.Reset)
 	return nil
 }
 
@@ -912,11 +939,11 @@ func (r *Run) signRecord() error {
 		return ui.Die("Staging config (node.toml.new) is missing.",
 			"Start a fresh run so the configure step re-creates it.")
 	}
-	r.ip = r.publicIP()
-	if r.ip == "" {
-		return ui.Die("Could not detect a valid public IPv4 address.",
-			"Retry with: "+r.opt.Argv0+" --resume --public-ip <this-server-public-IPv4>")
+	// A resume into this step detects again; a failure asks, as phase 2 does.
+	if err := r.ensureIP(); err != nil {
+		return err
 	}
+	r.ip = r.publicIP()
 	r.c.OK("Public IP: " + r.ip + " (" + r.ipSource + ")")
 	if !netinfo.GlobalIPv4(r.ip) {
 		r.c.Warn(r.ip + " is not a public address (private, loopback or reserved range).")

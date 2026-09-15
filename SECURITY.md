@@ -14,8 +14,9 @@ modules; every import is from the Go standard library. Concretely, it:
 - manages only the `monad-bft`, `monad-execution` and `monad-rpc` systemd units
 - runs `monad-keystore`, `monad-sign-name-record`, `monad-status` and
   `systemctl` with argument vectors, never through a shell
-- makes four kinds of outbound requests: `ifconfig.me` (HTTPS) to detect
-  the server's public IPv4 (bypassed with `--public-ip`); Monad Foundation's
+- makes four kinds of outbound requests: `ifconfig.me/ip`, then
+  `api.ipify.org`, then `icanhazip.com` (HTTPS, the first valid answer wins)
+  to detect the server's public IPv4 (bypassed with `--public-ip`); Monad Foundation's
   validator snapshot (`bucket.monadinfra.com/validator-data/<network>.json`,
   HTTPS) to read the last published name record sequence for your key, which
   is used only to suggest a number you can override; when `monad-status` is

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/s0urledd/monad-failover-go/internal/monad"
+	"github.com/s0urledd/monad-failover-go/internal/netinfo"
 	"github.com/s0urledd/monad-failover-go/internal/nodeconf"
 	"github.com/s0urledd/monad-failover-go/internal/paths"
 	"github.com/s0urledd/monad-failover-go/internal/place"
@@ -83,6 +84,14 @@ func DryRun(c *ui.Console, p paths.Paths, keySourceDir, version string) int {
 	} else {
 		c.Cross("missing: " + p.EnvFile)
 		fails++
+	}
+
+	c.Step("PUBLIC IP")
+	if ip := netinfo.DetectPublicIPv4(p.IPURLs...); ip != "" {
+		c.OK(ip + " (detected; --public-ip overrides it)")
+	} else {
+		c.Warn("could not detect the public IPv4 address; the run will ask for it, or pass --public-ip")
+		warns++
 	}
 
 	c.Step("DIRECTORIES")

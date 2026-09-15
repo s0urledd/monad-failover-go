@@ -96,7 +96,7 @@ func newHarness(t *testing.T) *harness {
 	h.ep = testutil.NewEndpoints()
 	t.Cleanup(h.ep.Close)
 	h.p.FoundationBase = h.ep.FoundationBase()
-	h.p.IPURL = h.ep.IPURL()
+	h.p.IPURLs = []string{h.ep.IPURL()}
 	h.p.UptimeMainnet, h.p.UptimeTestnet = h.ep.UptimeBase(), h.ep.UptimeBase()
 	h.p.RPCLocal = h.ep.RPCLocalURL()
 	h.p.RPCRefsMainnet, h.p.RPCRefsTestnet = h.ep.RPCReferenceURLs(), h.ep.RPCReferenceURLs()
@@ -1078,22 +1078,47 @@ func TestInvalidSequenceInputsAreRejected(t *testing.T) {
 	}
 }
 
-func TestIPDetectionFailureGivesOverrideHintAndResumeFinishes(t *testing.T) {
+// Detection failing is asked about in phase 2, before any key is imported;
+// the flag, a typed address or a resume with the flag all carry on.
+func TestIPDetectionFailureAsksBeforeAnyKeyIsImported(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
 	h.ep.IP = ""
-	code, out := h.run(beneficiary+"\n"+nodeName+"\n8\n", Options{KeySourceDir: h.keys})
+	code, out := h.run("", Options{KeySourceDir: h.keys})
 	if code != 1 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
-	expect(t, out, "Could not detect a valid public IPv4 address.", "monad-failover --resume --public-ip <this-server-public-IPv4>")
-	reject(t, out, "Public IP:")
+	expect(t, out, "Could not detect this server's public IPv4 address.", "Input ended while waiting for: public IPv4")
+	reject(t, out, "VALIDATOR KEY IMPORT")
 	h.assertServicesUntouched()
-	code, out = h.run(resumeStdin, Options{Resume: true, PublicIP: publicIP})
+	if _, err := os.Stat(h.d.SecpNew); err == nil {
+		t.Error("a key was imported before the address was known")
+	}
+	code, out = h.run(normalStdin(beneficiary, nodeName, "8"), Options{Resume: true, KeySourceDir: h.keys, PublicIP: publicIP})
 	if code != 0 {
 		t.Fatalf("resume exit %d:\n%s", code, out)
 	}
-	expect(t, out, "Resuming from step 6", "Public IP: "+publicIP, "VALIDATOR PROMOTION COMPLETE")
+	expect(t, out, "Public IP: "+publicIP+" (flag)", "public ip    "+publicIP+" (flag; detection failed)", "VALIDATOR PROMOTION COMPLETE")
+
+	h2 := newHarness(t)
+	h2.healthyEnv()
+	h2.ep.IP = ""
+	code, out = h2.run(publicIP+"\n"+normalStdin(beneficiary, nodeName, "8"), Options{KeySourceDir: h2.keys})
+	if code != 0 {
+		t.Fatalf("typed address: exit %d:\n%s", code, out)
+	}
+	expect(t, out, "? public IPv4 ›", "Public IP: "+publicIP+" (entered)", "public ip    "+publicIP+" (entered)", "VALIDATOR PROMOTION COMPLETE")
+	if !tomlIn(h2.read(h2.p.NodeToml), "peer_discovery", "self_address", `"`+publicIP+`:8000"`) {
+		t.Error("typed address not signed")
+	}
+
+	h3 := newHarness(t)
+	h3.healthyEnv()
+	h3.ep.IP = ""
+	if code, out := h3.run("999.1.1.1\n", Options{KeySourceDir: h3.keys}); code != 1 || !strings.Contains(out, "Not a valid IPv4 address: 999.1.1.1") {
+		t.Fatalf("invalid address: exit %d:\n%s", code, out)
+	}
+	h3.assertServicesUntouched()
 }
 
 func TestPublicIPOverrideIsSigned(t *testing.T) {
@@ -1487,6 +1512,7 @@ func TestDryRunOnHealthyEnvironmentPassesAndChangesNothing(t *testing.T) {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
 	expect(t, out, "DRY RUN", "systemctl", "monad-keystore", "KEYSTORE_PASSWORD set", "in-sync (block difference: 0)",
+		"PUBLIC IP", publicIP+" (detected; --public-ip overrides it)",
 		"RPC EXPOSURE CHECK", "(valid IKM format)", "Compare the derived public keys in the migration plan.", "Preflight passed")
 	reject(t, out, "NOT verified", "manual confirmation")
 	if h.liveSHAs() != before {
@@ -1970,4 +1996,15 @@ func TestWritableAncestorIsFoundByTheDryRun(t *testing.T) {
 	if code, out := h.dryRun(h.keys); code != 0 || !strings.Contains(out, "backups: "+h.p.BackupRoot) {
 		t.Fatalf("after the fix: exit %d:\n%s", code, out)
 	}
+}
+
+func TestDryRunWarnsWhenTheAddressCannotBeDetected(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	h.ep.IP = ""
+	code, out := h.dryRun(h.keys)
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	expect(t, out, "could not detect the public IPv4 address; the run will ask for it, or pass --public-ip", "Preflight passed")
 }

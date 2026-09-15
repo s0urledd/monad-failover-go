@@ -54,8 +54,11 @@ func ValidPort(s string) bool {
 	return err == nil && n >= 1 && n <= 65535
 }
 
-// DefaultIPURL is the service asked for the public IPv4 address.
-const DefaultIPURL = "https://ifconfig.me"
+// DefaultIPURLs are the services asked for the public IPv4 address, in
+// order; the first valid answer wins. Plain-text endpoints only: the root
+// of ifconfig.me answers a Go client with an HTML page, its /ip path with
+// the address.
+var DefaultIPURLs = []string{"https://ifconfig.me/ip", "https://api.ipify.org", "https://icanhazip.com"}
 
 // Client is an HTTP client restricted to IPv4: 10 s to connect, total as
 // given.
@@ -72,10 +75,26 @@ func Client(total time.Duration) *http.Client {
 	}
 }
 
-// DetectPublicIPv4 asks url for the address and returns it only if it is a
-// valid IPv4 literal. Any failure yields "".
-func DetectPublicIPv4(url string) string {
-	resp, err := Client(20 * time.Second).Get(url)
+// DetectPublicIPv4 asks each url in turn and returns the first answer that
+// is a valid IPv4 literal. Any failure yields "".
+func DetectPublicIPv4(urls ...string) string {
+	client := Client(20 * time.Second)
+	for _, url := range urls {
+		if ip := fetchIPv4(client, url); ip != "" {
+			return ip
+		}
+	}
+	return ""
+}
+
+func fetchIPv4(client *http.Client, url string) string {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("User-Agent", "monad-failover")
+	req.Header.Set("Accept", "text/plain")
+	resp, err := client.Do(req)
 	if err != nil {
 		return ""
 	}

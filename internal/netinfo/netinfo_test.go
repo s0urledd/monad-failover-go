@@ -65,3 +65,27 @@ func TestDetectPublicIPv4(t *testing.T) {
 		t.Errorf("unreachable endpoint: got %q", got)
 	}
 }
+
+// A service that answers a Go client with a web page is skipped and the
+// next one is asked; the root of ifconfig.me does exactly that.
+func TestDetectPublicIPv4SkipsHTMLAndFallsBack(t *testing.T) {
+	html := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<!DOCTYPE html><html><body>203.0.113.9</body></html>"))
+	}))
+	defer html.Close()
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("User-Agent") != "monad-failover" {
+			http.Error(w, "unexpected agent", http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte("203.0.113.9\n"))
+	}))
+	defer plain.Close()
+	if got := DetectPublicIPv4(html.URL, plain.URL); got != "203.0.113.9" {
+		t.Fatalf("got %q", got)
+	}
+	if got := DetectPublicIPv4(html.URL); got != "" {
+		t.Fatalf("HTML accepted: %q", got)
+	}
+}

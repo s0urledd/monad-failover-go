@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.2 — 2026-09-15
+
+- Public IP detection works again: the root of `ifconfig.me` answers a Go
+  client with a web page, not the address. The tool now asks
+  `ifconfig.me/ip`, then `api.ipify.org`, then `icanhazip.com`, and takes
+  the first valid answer.
+- When every service fails, the address is asked for in phase 2, before
+  any key is imported, instead of stopping the run at signing. `--public-ip`
+  still overrides detection, and a resume with it carries on.
+- The dry run reports the detected address, or warns that the run will ask.
+
 ## 0.4.1 — 2026-09-15
 
 - Run logs go to `/var/lib/monad-failover/logs/`, not `/var/log`. On

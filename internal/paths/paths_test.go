@@ -68,7 +68,7 @@ func TestSandboxHonoursOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !p.Sandbox || p.StateDirOverride != "/tmp/state" || p.IPURL != "http://127.0.0.1:1/ip" ||
+	if !p.Sandbox || p.StateDirOverride != "/tmp/state" || len(p.IPURLs) != 1 || p.IPURLs[0] != "http://127.0.0.1:1/ip" ||
 		p.UptimeMainnet != "http://127.0.0.1:1/uptime" || p.UptimeTestnet != "http://127.0.0.1:1/uptime" ||
 		p.HealthWait != 0 || p.SyncWait != 0 || p.RPCLocal != "http://127.0.0.1:1/rpc" ||
 		len(p.RPCRefsMainnet) != 2 || p.RPCRefsMainnet[1] != "http://127.0.0.1:1/b" || p.RPCRefsTestnet[0] != "http://127.0.0.1:1/a" {

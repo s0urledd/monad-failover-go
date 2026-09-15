@@ -36,7 +36,7 @@ type Paths struct {
 
 	FoundationBase   string
 	FoundationMaxAge time.Duration
-	IPURL            string
+	IPURLs           []string
 	UptimeMainnet    string
 	UptimeTestnet    string
 
@@ -151,9 +151,9 @@ func FromEnv() (Paths, error) {
 		}
 	}
 	p.StateDirOverride = testOnly["MF_STATE_DIR"]
-	p.IPURL = netinfo.DefaultIPURL
+	p.IPURLs = netinfo.DefaultIPURLs
 	if v := testOnly["MF_IP_URL"]; v != "" {
-		p.IPURL = v
+		p.IPURLs = []string{v}
 	}
 	p.UptimeMainnet, p.UptimeTestnet = DefaultUptimeMainnet, DefaultUptimeTestnet
 	if v := testOnly["MF_UPTIME_API_BASE"]; v != "" {
