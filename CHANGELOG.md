@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.1 — 2026-09-15
+
+Two adjustments to the RPC sync check, released so the README on main
+describes a tagged build again.
+
+- The second reading takes the public references first and the local head
+  last, so the time the reference calls take counts in the node's favour.
+  With that, the lag allowed is 5 blocks instead of 50; a local head more
+  than 50 blocks past every reference still means the references are
+  stale, not that the node is ahead.
+- An in-sync node prints the same short line whatever the source:
+  `Node: in-sync (block difference: N)`.
+
 ## 0.3.0 — 2026-09-15
 
 Sync is judged over RPC when `monad-status` is not installed. The manual

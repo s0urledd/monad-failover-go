@@ -23,7 +23,7 @@ import (
 )
 
 // Version is the tool version printed by --version and in the banner.
-const Version = "0.3.0"
+const Version = "0.3.1"
 
 func usage(argv0 string) {
 	fmt.Printf("monad-failover v%s — promote a synced Monad full node to validator\n", Version)
