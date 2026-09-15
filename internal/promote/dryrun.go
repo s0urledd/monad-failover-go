@@ -150,30 +150,30 @@ func DryRun(c *ui.Console, p paths.Paths, keySourceDir, version string) int {
 	warns += checkRPC(c)
 
 	c.Step("KEY BACKUP FILES")
-	dir := keySourceDir
-	if dir == "" || dir == "-" {
-		dir = p.BackupRoot
-		c.Println("  No --backup-dir given: checking " + dir + ", which may hold this node's own backups.")
-	}
-	for _, f := range []string{"secp-backup", "bls-backup"} {
-		path := dir + "/" + f
-		if _, err := os.Stat(path); err == nil {
-			raw := nodeconf.ExtractIKMFromBackup(path)
-			ikm, ok := nodeconf.ValidateIKM(raw)
-			ui.Zero(raw)
-			ui.Zero(ikm)
-			if ok {
-				c.OK(path + " (valid IKM format)")
+	if dir := keySourceDir; dir == "" || dir == "-" {
+		c.Warn("no --backup-dir given; the validator's backup files are not checked")
+		warns++
+	} else {
+		for _, f := range []string{"secp-backup", "bls-backup"} {
+			path := dir + "/" + f
+			if _, err := os.Stat(path); err == nil {
+				raw := nodeconf.ExtractIKMFromBackup(path)
+				ikm, ok := nodeconf.ValidateIKM(raw)
+				ui.Zero(raw)
+				ui.Zero(ikm)
+				if ok {
+					c.OK(path + " (valid IKM format)")
+				} else {
+					c.Warn(path + " exists but contains no valid IKM")
+					warns++
+				}
 			} else {
-				c.Warn(path + " exists but contains no valid IKM")
+				c.Warn(path + " not found — manual IKM entry would be required")
 				warns++
 			}
-		} else {
-			c.Warn(path + " not found — manual IKM entry would be required")
-			warns++
 		}
+		c.Println("  Compare the derived public keys in the migration plan.")
 	}
-	c.Println("  Compare the derived public keys in the migration plan.")
 
 	if _, err := os.Stat(p.NodeToml); err == nil {
 		c.Step("VERIFY CONFIG FLAGS")

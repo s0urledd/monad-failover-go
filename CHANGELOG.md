@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.0 — 2026-09-15
+
+The tool no longer writes under `/opt/monad`.
+
+- The identity backup taken before cutover and the key backups re-exported
+  after it go to `/var/lib/monad-failover/backup/`, the run log to
+  `/var/log/monad-failover/`. Both are root-only directories of the tool's
+  own, so the permissions of `/opt/monad` no longer matter and this node's
+  existing backups are never renamed. `BACKUP_ROOT` and `LOG_DIR` still
+  override the locations.
+- The validator's backups are read only from where the operator points:
+  `--backup-dir`, or the directory asked for in the run. There is no
+  default; the only directory the tool could have offered held this node's
+  own keys. The dry run says so when no `--backup-dir` is given instead of
+  checking the wrong files.
+- The RPC sync check waits one second between its two head readings
+  instead of three, and validates each public reference once.
+- A run of 0.3.x interrupted after cutover records its backup under the
+  old location; resume it with `BACKUP_ROOT=/opt/monad/backup`.
+
 ## 0.3.2 — 2026-09-15
 
 - The dry run checks the backup and log roots the way the live run does:

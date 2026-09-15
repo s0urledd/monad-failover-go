@@ -99,10 +99,13 @@ func Verify(c Config) Result {
 	if err != nil {
 		return Result{Verdict: Unverified, Detail: "local RPC did not answer eth_blockNumber (" + err.Error() + ")"}
 	}
-	refs := cl.referenceHeads(c.References, c.ChainID)
+	// A reference is validated once: reachable and on the expected chain.
+	// The second round only reads heads, and the local head last: see the
+	// package comment.
+	usable := cl.usableReferences(c.References, c.ChainID)
+	refs := cl.heads(usable)
 	c.Sleep(c.Interval)
-	// References first, the local head last: see the package comment.
-	if refs2 := cl.referenceHeads(c.References, c.ChainID); len(refs2) > 0 {
+	if refs2 := cl.heads(usable); len(refs2) > 0 {
 		refs = refs2
 	}
 	second, err := cl.head(c.Local)
@@ -210,14 +213,22 @@ func (c *client) syncing(url string) (bool, error) {
 	return bytes.HasPrefix(bytes.TrimSpace(raw), []byte("{")), nil
 }
 
-// referenceHeads reads the head of every reachable reference on the
-// expected chain. One that answers for another chain is left out.
-func (c *client) referenceHeads(refs []string, chain uint64) []uint64 {
+// usableReferences keeps the references that answer for the expected
+// chain. One that is down or on another chain is left out.
+func (c *client) usableReferences(refs []string, chain uint64) []string {
+	var out []string
+	for _, u := range refs {
+		if id, err := c.chainID(u); err == nil && id == chain {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
+// heads reads the head of every reference that answers.
+func (c *client) heads(refs []string) []uint64 {
 	var heads []uint64
 	for _, u := range refs {
-		if id, err := c.chainID(u); err != nil || id != chain {
-			continue
-		}
 		if h, err := c.head(u); err == nil {
 			heads = append(heads, h)
 		}

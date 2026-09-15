@@ -8,8 +8,9 @@ modules; every import is from the Go standard library. Concretely, it:
 
 - reads `KEYSTORE_PASSWORD` from `/home/monad/.env` (by parsing the one line, not
   by executing the file) and reads your `secp-backup` / `bls-backup` files
-- writes only under `/home/monad/monad-bft/config`, `/opt/monad/backup` and
-  `/var/lib/monad-failover` (resume state and staging), plus `/opt/monad/failover-logs`
+- writes only under `/home/monad/monad-bft/config` and its own root-only
+  directories: `/var/lib/monad-failover` (resume state, staging, the identity
+  backup and the re-exported key backups) and `/var/log/monad-failover`
 - manages only the `monad-bft`, `monad-execution` and `monad-rpc` systemd units
 - runs `monad-keystore`, `monad-sign-name-record`, `monad-status` and
   `systemctl` with argument vectors, never through a shell

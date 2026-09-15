@@ -40,6 +40,7 @@ type harness struct {
 	ep      *testutil.Endpoints
 	log     string // MOCK_LOG
 	sysPath string // PATH before the mocks were added
+	keys    string // the validator's backup files, where the operator keeps them
 }
 
 func repoRoot(t *testing.T) string {
@@ -66,8 +67,8 @@ func newHarness(t *testing.T) *harness {
 		SecpKey:          filepath.Join(home, "monad-bft", "config", "id-secp"),
 		BlsKey:           filepath.Join(home, "monad-bft", "config", "id-bls"),
 		PubkeyList:       filepath.Join(home, "pubkey-secp-bls"),
-		BackupRoot:       filepath.Join(root, "opt", "monad", "backup"),
-		LogDir:           filepath.Join(root, "opt", "monad", "failover-logs"),
+		BackupRoot:       filepath.Join(root, "var", "lib", "monad-failover", "backup"),
+		LogDir:           filepath.Join(root, "var", "log", "monad-failover"),
 		Sandbox:          true,
 		EUID:             os.Geteuid(),
 		HealthWait:       0,
@@ -76,7 +77,9 @@ func newHarness(t *testing.T) *harness {
 	}
 	h.d = state.Resolve(true, filepath.Join(root, "var", "lib", "monad-failover"))
 	os.MkdirAll(h.p.ConfigDir, 0o755)
-	os.MkdirAll(h.p.BackupRoot, 0o700)
+	// the tool creates its backup root itself; a dry run must not
+	h.keys = filepath.Join(root, "validator-backups")
+	os.MkdirAll(h.keys, 0o700)
 
 	h.log = filepath.Join(root, "mock.log")
 	os.WriteFile(h.log, nil, 0o644)
@@ -128,9 +131,9 @@ func (h *harness) healthyEnv() {
 	os.WriteFile(h.log+".active", nil, 0o644)
 	h.mock("monad-keystore", "import", "--ikm", strings.Repeat("9", 64), "--keystore-path", h.p.SecpKey, "--password", "testpass")
 	h.mock("monad-keystore", "import", "--ikm", strings.Repeat("8", 64), "--keystore-path", h.p.BlsKey, "--password", "testpass")
-	os.WriteFile(filepath.Join(h.p.BackupRoot, "secp-backup"),
+	os.WriteFile(filepath.Join(h.keys, "secp-backup"),
 		[]byte("Secp public key: "+testutil.MockSecp+"\nKeystore secret: "+testutil.SecpIKM+"\n"), 0o600)
-	os.WriteFile(filepath.Join(h.p.BackupRoot, "bls-backup"),
+	os.WriteFile(filepath.Join(h.keys, "bls-backup"),
 		[]byte("BLS public key: "+testutil.MockBls+"\nKeystore secret: "+testutil.BlsIKM+"\n"), 0o600)
 }
 
@@ -204,7 +207,7 @@ func interruptAtPlan(ben, name, seq string) string {
 }
 
 func (h *harness) normalOpts() Options {
-	return Options{KeySourceDir: h.p.BackupRoot, PublicIP: publicIP}
+	return Options{KeySourceDir: h.keys, PublicIP: publicIP}
 }
 
 func (h *harness) normalRun() (int, string) {
@@ -713,6 +716,10 @@ func TestFailedBackupExportKeepsStateAndResumeRetriesOnlyExport(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
 	t.Setenv("MOCK_FAIL_RECOVER_PATH", h.p.BlsKey)
+	// exports of an earlier run are what a fresh export would replace
+	os.MkdirAll(h.p.BackupRoot, 0o700)
+	os.WriteFile(filepath.Join(h.p.BackupRoot, "secp-backup"), []byte("earlier export\n"), 0o600)
+	os.WriteFile(filepath.Join(h.p.BackupRoot, "bls-backup"), []byte("earlier export\n"), 0o600)
 	code, out := h.normalRun()
 	if code != 1 {
 		t.Fatalf("exit %d:\n%s", code, out)
@@ -1075,7 +1082,7 @@ func TestIPDetectionFailureGivesOverrideHintAndResumeFinishes(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
 	h.ep.IP = ""
-	code, out := h.run(beneficiary+"\n"+nodeName+"\n8\n", Options{KeySourceDir: h.p.BackupRoot})
+	code, out := h.run(beneficiary+"\n"+nodeName+"\n8\n", Options{KeySourceDir: h.keys})
 	if code != 1 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -1093,7 +1100,7 @@ func TestPublicIPOverrideIsSigned(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
 	h.ep.IP = "198.51.100.99"
-	code, out := h.run(normalStdin(beneficiary, nodeName, "8"), Options{KeySourceDir: h.p.BackupRoot, PublicIP: "203.0.113.42"})
+	code, out := h.run(normalStdin(beneficiary, nodeName, "8"), Options{KeySourceDir: h.keys, PublicIP: "203.0.113.42"})
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -1109,7 +1116,7 @@ func TestPublicIPOverrideIsSigned(t *testing.T) {
 func TestDetectedIPCarriesItsSourceIntoThePlan(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
-	code, out := h.run(normalStdin(beneficiary, nodeName, "8"), Options{KeySourceDir: h.p.BackupRoot})
+	code, out := h.run(normalStdin(beneficiary, nodeName, "8"), Options{KeySourceDir: h.keys})
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -1131,20 +1138,28 @@ func TestManualIKMEntryPromotes(t *testing.T) {
 	}
 }
 
-func TestInteractiveBackupDirectoryDefaultsToBackupRoot(t *testing.T) {
+func TestInteractiveBackupDirectoryHasNoDefault(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
-	code, out := h.run("1\n\n"+normalStdin(beneficiary, nodeName, "8"), Options{PublicIP: publicIP})
+	code, out := h.run("1\n\n", Options{PublicIP: publicIP})
+	if code != 1 {
+		t.Fatalf("blank directory accepted: exit %d:\n%s", code, out)
+	}
+	expect(t, out, "? backup directory ›", "A backup directory is required.", "Re-run with --backup-dir, or choose option 2")
+	reject(t, out, "backup directory [")
+	h.assertServicesUntouched()
+	h.d.Store().Clear()
+	code, out = h.run("1\n"+h.keys+"\n"+normalStdin(beneficiary, nodeName, "8"), Options{PublicIP: publicIP})
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
-	expect(t, out, "backup directory ["+h.p.BackupRoot+"]", "IKM secrets extracted from backup files", "VALIDATOR PROMOTION COMPLETE")
+	expect(t, out, "IKM secrets extracted from backup files", "VALIDATOR PROMOTION COMPLETE")
 }
 
 func TestCorruptKeyBackupIsRefused(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
-	os.WriteFile(filepath.Join(h.p.BackupRoot, "secp-backup"), []byte("Keystore secret: nothex\n"), 0o600)
+	os.WriteFile(filepath.Join(h.keys, "secp-backup"), []byte("Keystore secret: nothex\n"), 0o600)
 	code, out := h.normalRun()
 	if code != 1 {
 		t.Fatalf("exit %d:\n%s", code, out)
@@ -1247,7 +1262,7 @@ func TestPlanRejectedAfterCutoverBeganKeepsState(t *testing.T) {
 func TestFlagInputsSkipPromptsButNotConfirmations(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
-	code, out := h.run(planStdin, Options{KeySourceDir: h.p.BackupRoot, PublicIP: publicIP,
+	code, out := h.run(planStdin, Options{KeySourceDir: h.keys, PublicIP: publicIP,
 		Beneficiary: beneficiary, NodeName: nodeName, Seq: "9"})
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
@@ -1264,7 +1279,7 @@ func TestFlagInputsSkipPromptsButNotConfirmations(t *testing.T) {
 func TestSeqFlagAtOrBelowPublishedIsRefused(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
-	code, out := h.run(planStdin, Options{KeySourceDir: h.p.BackupRoot, PublicIP: publicIP,
+	code, out := h.run(planStdin, Options{KeySourceDir: h.keys, PublicIP: publicIP,
 		Beneficiary: beneficiary, NodeName: nodeName, Seq: "7"})
 	if code != 1 {
 		t.Fatalf("exit %d:\n%s", code, out)
@@ -1284,7 +1299,7 @@ func TestInvalidFlagValuesAreRefusedByTheRun(t *testing.T) {
 	} {
 		h := newHarness(t)
 		h.healthyEnv()
-		tc.opt.KeySourceDir, tc.opt.PublicIP = h.p.BackupRoot, publicIP
+		tc.opt.KeySourceDir, tc.opt.PublicIP = h.keys, publicIP
 		code, out := h.run(planStdin, tc.opt)
 		if code != 1 {
 			t.Fatalf("%+v: exit %d:\n%s", tc.opt, code, out)
@@ -1339,7 +1354,7 @@ func TestResumeBeforeCutoverShowsThePlanFromState(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
 	h.ep.IP = "198.51.100.99"
-	if code, out := h.run(interruptAtPlan("", nodeName, "8"), Options{KeySourceDir: h.p.BackupRoot, PublicIP: publicIP}); code != 1 {
+	if code, out := h.run(interruptAtPlan("", nodeName, "8"), Options{KeySourceDir: h.keys, PublicIP: publicIP}); code != 1 {
 		t.Fatalf("setup exit %d:\n%s", code, out)
 	}
 	code, out := h.run(resumeStdin, Options{Resume: true})
@@ -1399,7 +1414,7 @@ func TestStateLeftAtStep3ResumesFromStep4(t *testing.T) {
 	backup := filepath.Join(h.p.BackupRoot, "failover-20260911-072052")
 	os.MkdirAll(backup, 0o700)
 	os.WriteFile(h.d.File, []byte("last_step=3\nnetwork=testnet\nbackup_dir="+backup+"\n"), 0o600)
-	code, out := h.run(normalStdin(beneficiary, nodeName, "8"), Options{Resume: true, KeySourceDir: h.p.BackupRoot, PublicIP: publicIP})
+	code, out := h.run(normalStdin(beneficiary, nodeName, "8"), Options{Resume: true, KeySourceDir: h.keys, PublicIP: publicIP})
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -1410,7 +1425,7 @@ func TestStateLeftAtStep3ResumesFromStep4(t *testing.T) {
 func TestResumeWithNothingToResumeStartsFresh(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
-	code, out := h.run(normalStdin(beneficiary, nodeName, "8"), Options{Resume: true, KeySourceDir: h.p.BackupRoot, PublicIP: publicIP})
+	code, out := h.run(normalStdin(beneficiary, nodeName, "8"), Options{Resume: true, KeySourceDir: h.keys, PublicIP: publicIP})
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -1464,7 +1479,10 @@ func TestDryRunOnHealthyEnvironmentPassesAndChangesNothing(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
 	before := h.liveSHAs()
-	code, out := h.dryRun("")
+	if code, out := h.dryRun(""); code != 0 || !strings.Contains(out, "no --backup-dir given; the validator's backup files are not checked") {
+		t.Fatalf("dry run without a key directory: exit %d:\n%s", code, out)
+	}
+	code, out := h.dryRun(h.keys)
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -1495,8 +1513,8 @@ func TestDryRunFailsOnEmptyEnvironment(t *testing.T) {
 func TestDryRunWarnsOnBackupWithoutIKM(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
-	os.WriteFile(filepath.Join(h.p.BackupRoot, "bls-backup"), []byte("nothing useful\n"), 0o600)
-	code, out := h.dryRun("")
+	os.WriteFile(filepath.Join(h.keys, "bls-backup"), []byte("nothing useful\n"), 0o600)
+	code, out := h.dryRun(h.keys)
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -1534,7 +1552,7 @@ func TestNonzeroStatusNeverPassesPreflight(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, out)
 	}
 	h.assertServicesUntouched()
-	code, out = h.dryRun(h.p.BackupRoot)
+	code, out = h.dryRun(h.keys)
 	if code != 1 {
 		t.Fatalf("dry run exit %d: %s", code, out)
 	}
@@ -1582,6 +1600,7 @@ func TestExportIgnoresPredictablePartialSymlink(t *testing.T) {
 	h.healthyEnv()
 	victim := filepath.Join(h.root, "unrelated")
 	os.WriteFile(victim, []byte("do not change"), 0600)
+	os.MkdirAll(h.p.BackupRoot, 0o700)
 	if err := os.Symlink(victim, filepath.Join(h.p.BackupRoot, "secp-backup.partial")); err != nil {
 		t.Fatal(err)
 	}
@@ -1601,7 +1620,7 @@ func TestExportIgnoresPredictablePartialSymlink(t *testing.T) {
 func TestDryRunCountsConfigWarnings(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
-	code, out := h.dryRun(h.p.BackupRoot)
+	code, out := h.dryRun(h.keys)
 	if code != 0 {
 		t.Fatal(out)
 	}
@@ -1621,7 +1640,7 @@ func TestUnitFileUnderEtcIsRefusedBeforeAnythingChanges(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
 	t.Setenv("MOCK_UNIT_DIR", "/etc/systemd/system")
-	code, out := h.dryRun(h.p.BackupRoot)
+	code, out := h.dryRun(h.keys)
 	if code != 1 {
 		t.Fatalf("dry run exit %d:\n%s", code, out)
 	}
@@ -1649,7 +1668,7 @@ func TestMissingUnitIsRefusedBeforeAnythingChanges(t *testing.T) {
 	}
 	expect(t, out, "monad-rpc: not found by systemd")
 	h.assertServicesUntouched()
-	if code, out := h.dryRun(h.p.BackupRoot); code != 1 || !strings.Contains(out, "monad-rpc: not found by systemd") {
+	if code, out := h.dryRun(h.keys); code != 1 || !strings.Contains(out, "monad-rpc: not found by systemd") {
 		t.Errorf("dry run exit %d:\n%s", code, out)
 	}
 }
@@ -1689,7 +1708,7 @@ func TestResumeSaysWhichFlagsItIgnores(t *testing.T) {
 	if code, out := h.run(interruptAtPlan(beneficiary, nodeName, "8"), h.normalOpts()); code != 1 {
 		t.Fatalf("setup exit %d:\n%s", code, out)
 	}
-	code, out := h.run(resumeStdin, Options{Resume: true, PublicIP: publicIP, KeySourceDir: h.p.BackupRoot,
+	code, out := h.run(resumeStdin, Options{Resume: true, PublicIP: publicIP, KeySourceDir: h.keys,
 		Beneficiary: "0x1111111111111111111111111111111111111111", NodeName: "other", Seq: "99"})
 	if code != 0 {
 		t.Fatalf("resume exit %d:\n%s", code, out)
@@ -1722,7 +1741,7 @@ func TestChainIDMustAgreeWithNetworkName(t *testing.T) {
 func TestNonPublicOverrideAddressIsWarnedAtSigningAndInThePlan(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
-	code, out := h.run(normalStdin(beneficiary, nodeName, "8"), Options{KeySourceDir: h.p.BackupRoot, PublicIP: "10.0.0.5"})
+	code, out := h.run(normalStdin(beneficiary, nodeName, "8"), Options{KeySourceDir: h.keys, PublicIP: "10.0.0.5"})
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -1839,7 +1858,7 @@ func TestWithoutMonadStatusSyncIsJudgedOverRPC(t *testing.T) {
 	expect(t, out, "Node: in-sync (block difference: 3)", "Node is in-sync", "VALIDATOR PROMOTION COMPLETE")
 	reject(t, out, "continue without sync check?", "monad-status not installed", "via RPC")
 	// the dry run says the same, with one line about the missing tool
-	code, out = h.dryRun(h.p.BackupRoot)
+	code, out = h.dryRun(h.keys)
 	if code != 0 {
 		t.Fatalf("dry run exit %d:\n%s", code, out)
 	}
@@ -1866,7 +1885,7 @@ func TestRPCNodeBehindOrStalledRefusesToStart(t *testing.T) {
 		if h.stateExists() {
 			t.Errorf("%s: state written before the sync gate", name)
 		}
-		if code, out := h.dryRun(h.p.BackupRoot); code != 1 || !strings.Contains(out, "node is not in sync:") {
+		if code, out := h.dryRun(h.keys); code != 1 || !strings.Contains(out, "node is not in sync:") {
 			t.Errorf("%s: dry run exit %d:\n%s", name, code, out)
 		}
 	}
@@ -1887,7 +1906,7 @@ func TestRPCUnverifiedStopsBeforeCutover(t *testing.T) {
 	h.assertServicesUntouched()
 	h.ep.Ref1.Down, h.ep.Ref2.Down = false, false
 	h.ep.Local.Down = true
-	if code, out := h.dryRun(h.p.BackupRoot); code != 1 || !strings.Contains(out, "sync could not be verified: local RPC did not answer") {
+	if code, out := h.dryRun(h.keys); code != 1 || !strings.Contains(out, "sync could not be verified: local RPC did not answer") {
 		t.Errorf("dry run exit %d:\n%s", code, out)
 	}
 }
@@ -1927,11 +1946,12 @@ func TestRPCAfterCutoverPendingThenResumeConfirms(t *testing.T) {
 func TestWritableAncestorIsFoundByTheDryRun(t *testing.T) {
 	h := newHarness(t)
 	h.healthyEnv()
-	optMonad := filepath.Join(h.root, "opt", "monad")
+	optMonad := filepath.Join(h.root, "var")
+	os.MkdirAll(optMonad, 0o755)
 	if err := os.Chmod(optMonad, 0o775); err != nil {
 		t.Fatal(err)
 	}
-	code, out := h.dryRun(h.p.BackupRoot)
+	code, out := h.dryRun(h.keys)
 	if code != 1 {
 		t.Fatalf("dry run exit %d:\n%s", code, out)
 	}
@@ -1947,7 +1967,7 @@ func TestWritableAncestorIsFoundByTheDryRun(t *testing.T) {
 		t.Error("state written")
 	}
 	os.Chmod(optMonad, 0o700)
-	if code, out := h.dryRun(h.p.BackupRoot); code != 0 || !strings.Contains(out, "backups: "+h.p.BackupRoot) {
+	if code, out := h.dryRun(h.keys); code != 0 || !strings.Contains(out, "backups: "+h.p.BackupRoot) {
 		t.Fatalf("after the fix: exit %d:\n%s", code, out)
 	}
 }

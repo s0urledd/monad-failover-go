@@ -60,6 +60,8 @@ const (
 	DefaultUptimeMainnet  = "https://validator-api.huginn.tech/monad-api/validator/uptime"
 	DefaultUptimeTestnet  = "https://validator-api-testnet.huginn.tech/monad-api/validator/uptime"
 	DefaultRPCLocal       = "http://127.0.0.1:8080"
+	DefaultBackupRoot     = "/var/lib/monad-failover/backup"
+	DefaultLogDir         = "/var/log/monad-failover"
 )
 
 // Public RPCs of each network, run by the Foundation. Two per network so
@@ -100,8 +102,12 @@ func FromEnv() (Paths, error) {
 	p.SecpKey = p.ConfigDir + "/id-secp"
 	p.BlsKey = p.ConfigDir + "/id-bls"
 	p.PubkeyList = p.MonadHome + "/pubkey-secp-bls"
-	p.BackupRoot = envOr("BACKUP_ROOT", "/opt/monad/backup")
-	p.LogDir = envOr("LOG_DIR", "/opt/monad/failover-logs")
+	// Everything the tool writes stays under root-only directories of its
+	// own. /opt/monad/backup is the node's own backup location and is never
+	// written to; the validator's backups are read from wherever the
+	// operator says.
+	p.BackupRoot = envOr("BACKUP_ROOT", DefaultBackupRoot)
+	p.LogDir = envOr("LOG_DIR", DefaultLogDir)
 
 	p.FoundationBase = envOr("FOUNDATION_DATA_BASE", DefaultFoundationBase)
 	var err error
@@ -159,6 +165,8 @@ func FromEnv() (Paths, error) {
 		refs := strings.Split(v, ",")
 		p.RPCRefsMainnet, p.RPCRefsTestnet = refs, refs
 	}
-	p.RPCInterval = 3 * time.Second
+	// Blocks are well under a second apart; one second between the two
+	// head readings shows movement without making the operator wait.
+	p.RPCInterval = time.Second
 	return p, nil
 }

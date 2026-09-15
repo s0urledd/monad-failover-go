@@ -10,7 +10,7 @@ Use it for a planned migration or recovery when the old server is unavailable.
 It runs on the target full node using your validator key backups, with no
 connection to the old server required.
 
-0.3.2 is under validation on testnet. Do not use it on a mainnet validator
+0.4.0 is under validation on testnet. Do not use it on a mainnet validator
 before 1.0.
 
 ## How it works
@@ -40,7 +40,8 @@ before 1.0.
 - Your validator's `secp-backup` and `bls-backup`: the text backups containing
   the secret IKM, not the encrypted `id-secp` / `id-bls` keystores.
   Place them in a private directory of their own on the target (directory
-  `700`, files `600`); `/opt/monad/backup` holds this node's own backups.
+  `700`, files `600`). Not `/opt/monad/backup`: that holds this node's own
+  backups, and the tool never writes there.
   These are unencrypted secrets; keep off-server copies. Hidden manual IKM
   entry is also available.
 - The validator's SECP and BLS public keys to compare against the plan.
@@ -57,8 +58,8 @@ On the target full node, as root. The checksum is verified before the
 binary is installed:
 
 ```bash
-curl -fsSLO https://github.com/s0urledd/monad-failover-go/releases/download/v0.3.2/monad-failover &&
-echo "a230c10e47ec7d3bb46599832847d01acdb8ae6a3e4c0dfc8bb2fa5ca621f8d1  monad-failover" | sha256sum -c - &&
+curl -fsSLO https://github.com/s0urledd/monad-failover-go/releases/download/v0.4.0/monad-failover &&
+echo "481fc0d690905e994ba9b8d992e0bffcd4faaf628b6f490a41acb4cd86ff6408  monad-failover" | sha256sum -c - &&
 install -m 755 monad-failover /usr/local/bin/monad-failover
 ```
 
@@ -66,7 +67,7 @@ To build from source, install Go 1.24.7 or later and run:
 
 ```bash
 git clone https://github.com/s0urledd/monad-failover-go
-cd monad-failover-go && git checkout v0.3.2
+cd monad-failover-go && git checkout v0.4.0
 CGO_ENABLED=0 go build -o monad-failover ./cmd/monad-failover
 install -m 755 monad-failover /usr/local/bin/monad-failover
 ```
@@ -107,9 +108,9 @@ monad-failover --backup-dir /path/to/validator-backups \
 ## If a run is interrupted
 
 Run `monad-failover --resume`, including after a partial cutover. Do not start
-a fresh migration over an unfinished swap. Logs are in `/opt/monad/failover-logs/`.
+a fresh migration over an unfinished swap. Logs are in `/var/log/monad-failover/`.
 
-The saved `/opt/monad/backup/failover-<timestamp>/` restores this server's
+The saved `/var/lib/monad-failover/backup/failover-<timestamp>/` restores this server's
 original full-node identity. It does not move the validator back to the old
 server. See [recovery](docs/recovery.md) if resume cannot finish.
 
@@ -118,10 +119,6 @@ server. See [recovery](docs/recovery.md) if resume cannot finish.
 Maintained to track Monad updates. The tool targets standard P2P ports:
 TCP/UDP `8000` and authenticated UDP `8001`. Custom P2P ports are not supported.
 
-- `/opt/monad` must be root-owned and not writable by other users (mode
-  `755`): backups and logs go under it, and a directory another account
-  could swap is refused. `chmod g-w,o-w /opt/monad` leaves its
-  subdirectories as they are.
 - Block public access to RPC and metrics ports (8080, 8081, 9143, etc.).
   Allow trusted sources only.
 - Configure [VDP metrics](https://docs.monad.xyz/node-ops/validator-delegation-program)

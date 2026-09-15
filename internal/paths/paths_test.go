@@ -26,9 +26,9 @@ func TestDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if p.MonadHome != "/home/monad" || p.NodeToml != "/home/monad/monad-bft/config/node.toml" ||
-		p.EnvFile != "/home/monad/.env" || p.BackupRoot != "/opt/monad/backup" || p.LogDir != "/opt/monad/failover-logs" ||
+		p.EnvFile != "/home/monad/.env" || p.BackupRoot != "/var/lib/monad-failover/backup" || p.LogDir != "/var/log/monad-failover" ||
 		p.FoundationBase != DefaultFoundationBase || p.UptimeMainnet != DefaultUptimeMainnet || p.RPCLocal != DefaultRPCLocal ||
-		len(p.RPCRefsTestnet) != 2 || p.RPCRefsTestnet[0] != "https://testnet-rpc.monad.xyz" || p.RPCInterval.Seconds() != 3 ||
+		len(p.RPCRefsTestnet) != 2 || p.RPCRefsTestnet[0] != "https://testnet-rpc.monad.xyz" || p.RPCInterval.Seconds() != 1 ||
 		p.HealthWait.Seconds() != 5 || p.SyncWait.Seconds() != 120 || p.FoundationMaxAge.Seconds() != 86400 {
 		t.Errorf("defaults: %+v", p)
 	}

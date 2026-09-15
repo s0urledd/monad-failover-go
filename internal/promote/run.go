@@ -507,12 +507,15 @@ func (r *Run) importKeys() error {
 		}
 		switch choice {
 		case "1":
-			dir, err := r.c.Ask("backup directory [" + r.p.BackupRoot + "]")
+			// No default: the only directory the tool could offer is the
+			// node's own backup location, which holds the wrong keys.
+			dir, err := r.c.Ask("backup directory")
 			if err != nil {
 				return err
 			}
-			if dir == "" {
-				dir = r.p.BackupRoot
+			if strings.TrimSpace(dir) == "" {
+				return ui.Die("A backup directory is required.",
+					"Re-run with --backup-dir, or choose option 2 to paste the IKM values.")
 			}
 			src = dir
 		case "2":

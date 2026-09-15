@@ -15,7 +15,7 @@ start services while the tool reports mismatched keys or config.
 - Backup export failed: preserve the validator backup files you supplied and
   the timestamped `.bak` copies. Fix the reported cause, then run `--resume`.
 
-Logs are in `/opt/monad/failover-logs/`. The current run's state is
+Logs are in `/var/log/monad-failover/`. The current run's state is
 `/var/lib/monad-failover/state`. Read it as text, never source it as shell code.
 
 ## Restoring this target to its previous full-node identity
@@ -51,7 +51,7 @@ fails. These are the default installation paths; review any custom paths first.
    the original full-node backups before replacing anything:
 
    ```bash
-   backup=/opt/monad/backup/failover-YYYYMMDD-HHMMSS
+   backup=/var/lib/monad-failover/backup/failover-YYYYMMDD-HHMMSS
    config=/home/monad/monad-bft/config
    for file in node.toml id-secp id-bls; do
      test -f "$backup/$file" && test ! -L "$backup/$file" || break
