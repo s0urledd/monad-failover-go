@@ -7,8 +7,9 @@ Sync is judged over RPC when `monad-status` is not installed. The manual
 
 - Without `monad-status`, the node's own RPC (`127.0.0.1:8080`) is compared
   with the Foundation's public RPCs of the network: the chain id must match,
-  the local head must be within 50 blocks of the network head, and it must
-  advance between two readings three seconds apart. `eth_syncing` is read
+  the local head, read after the references, must be within 5 blocks of the
+  network head, and it must advance between two readings three seconds
+  apart. `eth_syncing` is read
   but never trusted on its own: the Monad RPC answers `false` for it
   unconditionally. A node that cannot be compared (RPC not answering,
   public RPCs unreachable) is "unverified" and the run stops before

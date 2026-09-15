@@ -8,6 +8,11 @@
 // that its head moves between two readings. All three must hold. A node
 // that cannot be reached, or a network that cannot be compared against,
 // is "unverified", never "in sync".
+//
+// The comparison reads the references first and the local head last, so
+// the time the reference calls take counts in the node's favour: a node at
+// the tip reads level with or ahead of what the references showed, and a
+// difference of more than a few blocks is lag, not measurement.
 package rpcsync
 
 import (
@@ -46,14 +51,20 @@ type Config struct {
 	References []string // public endpoints of the same network
 	ChainID    uint64   // expected eth_chainId
 	MaxBehind  uint64   // blocks the local head may trail the network head
+	MaxAhead   uint64   // blocks the local head may lead every reference before the comparison is distrusted
 	Interval   time.Duration
 	Timeout    time.Duration // per request
 	Sleep      func(time.Duration)
 }
 
-// DefaultMaxBehind is generous for a healthy node (blocks are well under a
-// second apart) and far below what state sync leaves to catch up.
-const DefaultMaxBehind = 50
+// DefaultMaxBehind is a couple of seconds of blocks: the local head is
+// read after the references, so a node at the tip shows 0 or 1 behind and
+// anything past this is real lag. State sync leaves thousands to catch up.
+const DefaultMaxBehind = 5
+
+// DefaultMaxAhead: a local head this far past every public RPC means the
+// references are stale, not that the node is ahead of the network.
+const DefaultMaxAhead = 50
 
 // Verify runs the check: chain, two readings of every head, comparison.
 func Verify(c Config) Result {
@@ -65,6 +76,9 @@ func Verify(c Config) Result {
 	}
 	if c.MaxBehind == 0 {
 		c.MaxBehind = DefaultMaxBehind
+	}
+	if c.MaxAhead == 0 {
+		c.MaxAhead = DefaultMaxAhead
 	}
 	cl := &client{http: netinfo.Client(c.Timeout)}
 
@@ -85,13 +99,13 @@ func Verify(c Config) Result {
 	}
 	refs := cl.referenceHeads(c.References, c.ChainID)
 	c.Sleep(c.Interval)
+	// References first, the local head last: see the package comment.
+	if refs2 := cl.referenceHeads(c.References, c.ChainID); len(refs2) > 0 {
+		refs = refs2
+	}
 	second, err := cl.head(c.Local)
 	if err != nil {
 		return Result{Verdict: Unverified, Detail: "local RPC stopped answering eth_blockNumber (" + err.Error() + ")"}
-	}
-	refs2 := cl.referenceHeads(c.References, c.ChainID)
-	if len(refs2) > 0 {
-		refs = refs2
 	}
 	if len(refs) == 0 {
 		return Result{Verdict: Unverified, LocalHead: second,
@@ -111,16 +125,17 @@ func Verify(c Config) Result {
 	case second+c.MaxBehind < net:
 		res.Verdict = NotInSync
 		res.Detail = fmt.Sprintf("local head %d is %d blocks behind the network head %d", second, net-second, net)
-	case second > net+c.MaxBehind:
+	case second > net+c.MaxAhead:
 		res.Verdict = Unverified
 		res.Detail = fmt.Sprintf("local head %d is ahead of every public RPC (%d); cannot compare", second, net)
 	default:
 		res.Verdict = InSync
-		behind := int64(net) - int64(second)
-		if behind < 0 {
-			behind = 0
+		switch {
+		case second >= net:
+			res.Detail = fmt.Sprintf("local head %d, at the network head (%d), advancing", second, net)
+		default:
+			res.Detail = fmt.Sprintf("local head %d, network head %d, %d behind, advancing", second, net, net-second)
 		}
-		res.Detail = fmt.Sprintf("local head %d, network head %d, %d behind, advancing", second, net, behind)
 	}
 	return res
 }

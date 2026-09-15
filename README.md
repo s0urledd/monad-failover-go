@@ -58,7 +58,7 @@ binary is installed:
 
 ```bash
 curl -fsSLO https://github.com/s0urledd/monad-failover-go/releases/download/v0.3.0/monad-failover &&
-echo "a90e05158da1a8b9917bcde20908c00455b4ac749e85d353ec65f5e516554dc8  monad-failover" | sha256sum -c - &&
+echo "5b0eebaf78310789e936c565303962416fb440545c0feabecfdb8e298e961e6b  monad-failover" | sha256sum -c - &&
 install -m 755 monad-failover /usr/local/bin/monad-failover
 ```
 
