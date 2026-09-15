@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.0 — 2026-09-15
+
+Sync is judged over RPC when `monad-status` is not installed. The manual
+"continue without sync check?" prompt is gone.
+
+- Without `monad-status`, the node's own RPC (`127.0.0.1:8080`) is compared
+  with the Foundation's public RPCs of the network: the chain id must match,
+  the local head must be within 50 blocks of the network head, and it must
+  advance between two readings three seconds apart. `eth_syncing` is read
+  but never trusted on its own: the Monad RPC answers `false` for it
+  unconditionally. A node that cannot be compared (RPC not answering,
+  public RPCs unreachable) is "unverified" and the run stops before
+  cutover rather than assuming sync.
+- After cutover the same check runs inside the sync window; an unverified
+  reading is retried and ends as "verification pending", as it did with
+  `monad-status`, never as success.
+- The dry run reports one sync result instead of two warnings about the
+  missing tool, and says only "valid IKM format" for the backup files,
+  with a note that the derived public keys are compared in the plan.
+- Test doubles include JSON-RPC nodes; the flow tests cover the RPC path
+  before and after cutover, a node behind, stalled or on another chain,
+  and unreachable endpoints.
+
 ## 0.2.2 — 2026-09-14
 
 - Use one plan confirmation for both interactive and flag-based migrations.

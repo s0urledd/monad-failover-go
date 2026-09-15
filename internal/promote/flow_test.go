@@ -33,12 +33,13 @@ const (
 var ansi = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 type harness struct {
-	t    *testing.T
-	root string
-	p    paths.Paths
-	d    state.Dir
-	ep   *testutil.Endpoints
-	log  string // MOCK_LOG
+	t       *testing.T
+	root    string
+	p       paths.Paths
+	d       state.Dir
+	ep      *testutil.Endpoints
+	log     string // MOCK_LOG
+	sysPath string // PATH before the mocks were added
 }
 
 func repoRoot(t *testing.T) string {
@@ -80,7 +81,8 @@ func newHarness(t *testing.T) *harness {
 	h.log = filepath.Join(root, "mock.log")
 	os.WriteFile(h.log, nil, 0o644)
 	t.Setenv("MOCK_LOG", h.log)
-	t.Setenv("PATH", filepath.Join(repoRoot(t), "tests", "mocks")+":"+os.Getenv("PATH"))
+	h.sysPath = os.Getenv("PATH")
+	t.Setenv("PATH", filepath.Join(repoRoot(t), "tests", "mocks")+":"+h.sysPath)
 	for _, k := range []string{"MOCK_PREMASKED", "MOCK_MASK_FAIL", "MOCK_FAIL_START", "MOCK_CRASH_AFTER_START",
 		"MOCK_STATUS", "MOCK_STATUS_AFTER", "MOCK_SEQ_OFFSET", "MOCK_UDP_PORT", "MOCK_SIGNER_OMIT", "MOCK_FAIL_RECOVER_PATH",
 		"MOCK_UNIT_DIR", "MOCK_MISSING_UNIT", "MOCK_STOP_SLEEP", "MOCK_STOP_FAIL", "MOCK_QUERY_FAIL", "MOCK_STATUS_EXIT"} {
@@ -93,7 +95,24 @@ func newHarness(t *testing.T) *harness {
 	h.p.FoundationBase = h.ep.FoundationBase()
 	h.p.IPURL = h.ep.IPURL()
 	h.p.UptimeMainnet, h.p.UptimeTestnet = h.ep.UptimeBase(), h.ep.UptimeBase()
+	h.p.RPCLocal = h.ep.RPCLocalURL()
+	h.p.RPCRefsMainnet, h.p.RPCRefsTestnet = h.ep.RPCReferenceURLs(), h.ep.RPCReferenceURLs()
+	h.p.RPCInterval = 0
 	return h
+}
+
+// withoutMonadStatus puts a mock directory without monad-status on PATH, so
+// the run has to judge sync over RPC.
+func (h *harness) withoutMonadStatus() {
+	h.t.Helper()
+	dir := filepath.Join(h.root, "mocks-no-status")
+	os.MkdirAll(dir, 0o755)
+	for _, m := range []string{"systemctl", "monad-keystore", "monad-sign-name-record"} {
+		if err := os.Symlink(filepath.Join(repoRoot(h.t), "tests", "mocks", m), filepath.Join(dir, m)); err != nil {
+			h.t.Fatal(err)
+		}
+	}
+	h.t.Setenv("PATH", dir+":"+h.sysPath)
 }
 
 // healthyEnv builds a synced full node: config, .env, live full-node keys,
@@ -1450,7 +1469,8 @@ func TestDryRunOnHealthyEnvironmentPassesAndChangesNothing(t *testing.T) {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
 	expect(t, out, "DRY RUN", "systemctl", "monad-keystore", "KEYSTORE_PASSWORD set", "in-sync (block difference: 0)",
-		"RPC EXPOSURE CHECK", "valid IKM format; validator identity NOT verified", "Preflight passed")
+		"RPC EXPOSURE CHECK", "(valid IKM format)", "Compare the derived public keys in the migration plan.", "Preflight passed")
+	reject(t, out, "NOT verified", "manual confirmation")
 	if h.liveSHAs() != before {
 		t.Error("files changed")
 	}
@@ -1804,4 +1824,100 @@ func TestSingleConfirmationStartsCutover(t *testing.T) {
 	}
 	reject(t, out, "type STOPPED")
 	expect(t, out, "VALIDATOR PROMOTION COMPLETE")
+}
+
+// ── sync over RPC, for hosts without monad-status ──
+
+func TestWithoutMonadStatusSyncIsJudgedOverRPC(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	h.withoutMonadStatus()
+	code, out := h.normalRun()
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	expect(t, out, "Node: in-sync via RPC (local head", "advancing)", "Node is in-sync via RPC", "VALIDATOR PROMOTION COMPLETE")
+	reject(t, out, "continue without sync check?", "monad-status not installed")
+	// the dry run says the same, with one line about the missing tool
+	code, out = h.dryRun(h.p.BackupRoot)
+	if code != 0 {
+		t.Fatalf("dry run exit %d:\n%s", code, out)
+	}
+	expect(t, out, "monad-status not installed; sync is checked over RPC instead", "in-sync via RPC (local head", "Preflight passed")
+	reject(t, out, "manual confirmation", "cannot verify sync without monad-status")
+}
+
+func TestRPCNodeBehindOrStalledRefusesToStart(t *testing.T) {
+	for name, tweak := range map[string]func(e *testutil.Endpoints){
+		"behind":      func(e *testutil.Endpoints) { e.Local.Head = 10 },
+		"stalled":     func(e *testutil.Endpoints) { e.Local.Step = 0 },
+		"other chain": func(e *testutil.Endpoints) { e.Local.Chain = testutil.MainnetChain },
+	} {
+		h := newHarness(t)
+		h.healthyEnv()
+		h.withoutMonadStatus()
+		tweak(h.ep)
+		code, out := h.normalRun()
+		if code != 1 {
+			t.Fatalf("%s: exit %d:\n%s", name, code, out)
+		}
+		expect(t, out, "Node is not in sync:", "Must be fully synced before promotion.")
+		h.assertServicesUntouched()
+		if h.stateExists() {
+			t.Errorf("%s: state written before the sync gate", name)
+		}
+		if code, out := h.dryRun(h.p.BackupRoot); code != 1 || !strings.Contains(out, "node is not in sync:") {
+			t.Errorf("%s: dry run exit %d:\n%s", name, code, out)
+		}
+	}
+}
+
+// Unreachable is not in sync: with no monad-status and no comparison the
+// run stops, and says what to make reachable.
+func TestRPCUnverifiedStopsBeforeCutover(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	h.withoutMonadStatus()
+	h.ep.Ref1.Down, h.ep.Ref2.Down = true, true
+	code, out := h.normalRun()
+	if code != 1 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	expect(t, out, "Sync could not be verified: no public RPC of this network could be reached", "Make both reachable, or install")
+	h.assertServicesUntouched()
+	h.ep.Ref1.Down, h.ep.Ref2.Down = false, false
+	h.ep.Local.Down = true
+	if code, out := h.dryRun(h.p.BackupRoot); code != 1 || !strings.Contains(out, "sync could not be verified: local RPC did not answer") {
+		t.Errorf("dry run exit %d:\n%s", code, out)
+	}
+}
+
+// After cutover the RPC answers only once state sync is done: an
+// unverified reading is pending, never success, and the resume re-checks.
+func TestRPCAfterCutoverPendingThenResumeConfirms(t *testing.T) {
+	h := newHarness(t)
+	h.healthyEnv()
+	h.withoutMonadStatus()
+	// the preflight reads chain, syncing and two heads; after that the
+	// node's RPC goes away, as it does while the restarted node syncs
+	h.ep.Local.DownAfter = 4
+	code, out := h.normalRun()
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	expect(t, out, "Node: in-sync via RPC", "Sync not confirmed via RPC after 0s: local RPC did not answer eth_chainId",
+		"CUTOVER COMPLETE — VERIFICATION PENDING", "Key backups exported")
+	reject(t, out, "VALIDATOR PROMOTION COMPLETE")
+	if h.stateValue("last_step") != "7" {
+		t.Errorf("state should stay at step 7, got %q", h.stateValue("last_step"))
+	}
+	h.ep.Local.DownAfter = 0
+	code, out = h.run("", Options{Resume: true, PublicIP: publicIP})
+	if code != 0 {
+		t.Fatalf("resume exit %d:\n%s", code, out)
+	}
+	expect(t, out, "Node is in-sync via RPC", "VALIDATOR PROMOTION COMPLETE")
+	if h.stateExists() {
+		t.Error("state kept after confirmed sync")
+	}
 }

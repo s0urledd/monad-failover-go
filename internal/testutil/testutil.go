@@ -4,10 +4,13 @@
 package testutil
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -105,19 +108,83 @@ func UptimeActive(secp string) string {
 	return fmt.Sprintf(`{"success": true, "uptime": {"validator_name": "MockVal", "secp_address": "%s", "status": "active", "window_hours": 24, "finalized_count": 356, "timeout_count": 0, "uptime_percent": 100, "last_round": 87138952}}`, secp)
 }
 
+// RPCNode is a JSON-RPC stand-in for a Monad node: eth_chainId,
+// eth_blockNumber (the head advances by Step on every reading) and
+// eth_syncing (false, as the real RPC answers, unless Syncing is set).
+type RPCNode struct {
+	mu        sync.Mutex
+	Chain     string // hex quantity, e.g. "0x279f"
+	Head      uint64
+	Step      uint64
+	Syncing   bool // answer a sync object instead of false
+	Down      bool // answer 500
+	Malformed bool // answer something that is not JSON-RPC
+	DownAfter int  // answer this many requests, then 500 (0: no limit)
+	calls     int
+}
+
+// TestnetChain and MainnetChain are the hex chain ids the RPC reports.
+const (
+	TestnetChain = "0x279f"
+	MainnetChain = "0x8f"
+)
+
+func (n *RPCNode) serve(w http.ResponseWriter, r *http.Request) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.calls++
+	if n.Down || (n.DownAfter > 0 && n.calls > n.DownAfter) {
+		http.Error(w, "unavailable", http.StatusInternalServerError)
+		return
+	}
+	if n.Malformed {
+		_, _ = w.Write([]byte("<html>not an rpc</html>"))
+		return
+	}
+	body, _ := io.ReadAll(r.Body)
+	var req struct {
+		Method string `json:"method"`
+	}
+	_ = json.Unmarshal(body, &req)
+	var result string
+	switch req.Method {
+	case "eth_chainId":
+		result = `"` + n.Chain + `"`
+	case "eth_blockNumber":
+		result = fmt.Sprintf(`"0x%x"`, n.Head)
+		n.Head += n.Step
+	case "eth_syncing":
+		result = "false"
+		if n.Syncing {
+			result = fmt.Sprintf(`{"startingBlock":"0x0","currentBlock":"0x%x","highestBlock":"0x%x"}`, n.Head, n.Head+5000)
+		}
+	default:
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"method not found"}}`))
+		return
+	}
+	_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":` + result + `}`))
+}
+
 // Endpoints is one HTTP server standing in for ifconfig.me, the Foundation
-// bucket and the uptime API. Each field can be changed between requests.
+// bucket, the uptime API, this node's RPC and two public RPCs. Each field
+// can be changed between requests.
 type Endpoints struct {
 	Server *httptest.Server
 
 	IP       string // "" answers 500
 	Snapshot string // "" answers 500
 	Uptime   string // "" answers 500
+
+	Local, Ref1, Ref2 *RPCNode
 }
 
-// NewEndpoints starts the server with healthy defaults.
+// NewEndpoints starts the server with healthy defaults: a testnet node a
+// couple of blocks behind two public RPCs, all advancing.
 func NewEndpoints() *Endpoints {
-	e := &Endpoints{IP: "203.0.113.7", Snapshot: Snapshot(SnapshotOpts{}), Uptime: UptimeActive(MockSecp)}
+	e := &Endpoints{IP: "203.0.113.7", Snapshot: Snapshot(SnapshotOpts{}), Uptime: UptimeActive(MockSecp),
+		Local: &RPCNode{Chain: TestnetChain, Head: 1000, Step: 1},
+		Ref1:  &RPCNode{Chain: TestnetChain, Head: 1002, Step: 1},
+		Ref2:  &RPCNode{Chain: TestnetChain, Head: 1003, Step: 1}}
 	e.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body string
 		switch {
@@ -127,6 +194,15 @@ func NewEndpoints() *Endpoints {
 			body = e.Snapshot
 		case strings.HasPrefix(r.URL.Path, "/uptime/"):
 			body = e.Uptime
+		case r.URL.Path == "/rpc/local":
+			e.Local.serve(w, r)
+			return
+		case r.URL.Path == "/rpc/ref1":
+			e.Ref1.serve(w, r)
+			return
+		case r.URL.Path == "/rpc/ref2":
+			e.Ref2.serve(w, r)
+			return
 		}
 		if body == "" {
 			http.Error(w, "unavailable", http.StatusInternalServerError)
@@ -135,6 +211,12 @@ func NewEndpoints() *Endpoints {
 		_, _ = w.Write([]byte(body))
 	}))
 	return e
+}
+
+// RPCLocalURL and RPCReferenceURLs are the sync-check endpoints.
+func (e *Endpoints) RPCLocalURL() string { return e.Server.URL + "/rpc/local" }
+func (e *Endpoints) RPCReferenceURLs() []string {
+	return []string{e.Server.URL + "/rpc/ref1", e.Server.URL + "/rpc/ref2"}
 }
 
 // IPURL, FoundationBase and UptimeBase are the values for the tool's endpoint overrides.

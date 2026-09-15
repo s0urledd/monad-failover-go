@@ -13,13 +13,18 @@ modules; every import is from the Go standard library. Concretely, it:
 - manages only the `monad-bft`, `monad-execution` and `monad-rpc` systemd units
 - runs `monad-keystore`, `monad-sign-name-record`, `monad-status` and
   `systemctl` with argument vectors, never through a shell
-- makes three kinds of outbound requests, all HTTPS: `ifconfig.me` to detect
+- makes four kinds of outbound requests: `ifconfig.me` (HTTPS) to detect
   the server's public IPv4 (bypassed with `--public-ip`); Monad Foundation's
-  validator snapshot (`bucket.monadinfra.com/validator-data/<network>.json`) to
-  read the last published name record sequence for your key, which is used only
-  to suggest a number you can override; and the monval uptime API
-  (`validator-api.huginn.tech`, operated by Huginn) after cutover for a historical
-  view of the validator identity. The lookup includes its public SECP key in
+  validator snapshot (`bucket.monadinfra.com/validator-data/<network>.json`,
+  HTTPS) to read the last published name record sequence for your key, which
+  is used only to suggest a number you can override; when `monad-status` is
+  not installed, JSON-RPC calls (`eth_chainId`, `eth_blockNumber`,
+  `eth_syncing`) to this node's own RPC on `127.0.0.1:8080` and to the
+  Foundation's public RPCs of the network (`rpc.monad.xyz`,
+  `rpc-mainnet.monadinfra.com`, `testnet-rpc.monad.xyz`,
+  `rpc-testnet.monadinfra.com`, HTTPS) to judge sync; and the monval uptime
+  API (`validator-api.huginn.tech`, operated by Huginn) after cutover for a
+  historical view of the validator identity. The lookup includes its public SECP key in
   the URL. As with any HTTPS request, the endpoint also sees the caller's IP.
   Snapshot and uptime failures do not block migration; failed IP detection
   requires an explicit `--public-ip` before signing can continue

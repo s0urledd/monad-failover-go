@@ -9,6 +9,7 @@ import (
 	"github.com/s0urledd/monad-failover-go/internal/nodeconf"
 	"github.com/s0urledd/monad-failover-go/internal/paths"
 	"github.com/s0urledd/monad-failover-go/internal/rpcports"
+	"github.com/s0urledd/monad-failover-go/internal/rpcsync"
 	"github.com/s0urledd/monad-failover-go/internal/ui"
 )
 
@@ -59,8 +60,7 @@ func DryRun(c *ui.Console, p paths.Paths, keySourceDir, version string) int {
 	if monad.Have("monad-status") {
 		c.OK("monad-status")
 	} else {
-		c.Warn("monad-status not installed — sync gate will need manual confirmation")
-		warns++
+		c.Println("  monad-status not installed; sync is checked over RPC instead")
 	}
 
 	c.Step("FILES & ENVIRONMENT")
@@ -99,9 +99,22 @@ func DryRun(c *ui.Console, p paths.Paths, keySourceDir, version string) int {
 			c.Cross("node is " + status + " — must be in-sync before promotion")
 			fails++
 		}
+	} else if cfg, err := rpcSyncConfig(p, ""); err != nil {
+		c.Cross(err.Error())
+		fails++
 	} else {
-		c.Warn("cannot verify sync without monad-status")
-		warns++
+		switch res := rpcsync.Verify(cfg); res.Verdict {
+		case rpcsync.InSync:
+			c.OK("in-sync via RPC (" + res.Detail + ")")
+		case rpcsync.NotInSync:
+			c.Cross("node is not in sync: " + res.Detail)
+			fails++
+		default:
+			c.Cross("sync could not be verified: " + res.Detail)
+			c.Println("  Without monad-status, the node's RPC at " + p.RPCLocal + " is compared with the")
+			c.Println("  public RPCs of the network. Make both reachable, or install monad-status.")
+			fails++
+		}
 	}
 
 	c.Step("SYSTEMD UNITS")
@@ -123,11 +136,10 @@ func DryRun(c *ui.Console, p paths.Paths, keySourceDir, version string) int {
 	warns += checkRPC(c)
 
 	c.Step("KEY BACKUP FILES")
-	c.Println("  Format check only: validator identity is NOT verified.")
-	c.Println("  These may be this full node's own backups. Select the validator's backups in the live run.")
 	dir := keySourceDir
 	if dir == "" || dir == "-" {
 		dir = p.BackupRoot
+		c.Println("  No --backup-dir given: checking " + dir + ", which may hold this node's own backups.")
 	}
 	for _, f := range []string{"secp-backup", "bls-backup"} {
 		path := dir + "/" + f
@@ -137,7 +149,7 @@ func DryRun(c *ui.Console, p paths.Paths, keySourceDir, version string) int {
 			ui.Zero(raw)
 			ui.Zero(ikm)
 			if ok {
-				c.OK(path + " (valid IKM format; validator identity NOT verified)")
+				c.OK(path + " (valid IKM format)")
 			} else {
 				c.Warn(path + " exists but contains no valid IKM")
 				warns++
@@ -147,6 +159,7 @@ func DryRun(c *ui.Console, p paths.Paths, keySourceDir, version string) int {
 			warns++
 		}
 	}
+	c.Println("  Compare the derived public keys in the migration plan.")
 
 	if _, err := os.Stat(p.NodeToml); err == nil {
 		c.Step("VERIFY CONFIG FLAGS")

@@ -17,6 +17,7 @@ import (
 	"github.com/s0urledd/monad-failover-go/internal/nodeconf"
 	"github.com/s0urledd/monad-failover-go/internal/paths"
 	"github.com/s0urledd/monad-failover-go/internal/place"
+	"github.com/s0urledd/monad-failover-go/internal/rpcsync"
 	"github.com/s0urledd/monad-failover-go/internal/state"
 	"github.com/s0urledd/monad-failover-go/internal/ui"
 )
@@ -339,11 +340,45 @@ func (r *Run) checkSync() error {
 		}
 		return ui.Die("Node is " + status + ". Must be fully synced before promotion.")
 	}
-	r.c.Warn("monad-status not installed — cannot verify sync")
-	if !r.c.ConfirmYN("continue without sync check?") {
-		return ui.Die("Aborted.")
+	// Without monad-status the node's own RPC is compared with the public
+	// RPCs of its network. Nothing is asked of the operator: a node that
+	// cannot be compared is not assumed to be in sync.
+	cfg, err := rpcSyncConfig(r.p, r.network)
+	if err != nil {
+		return err
 	}
-	return nil
+	res := rpcsync.Verify(cfg)
+	switch res.Verdict {
+	case rpcsync.InSync:
+		r.c.OK("Node: in-sync via RPC (" + res.Detail + ")")
+		return nil
+	case rpcsync.NotInSync:
+		return ui.Die("Node is not in sync: "+res.Detail+".", "Must be fully synced before promotion.")
+	}
+	return ui.Die("Sync could not be verified: "+res.Detail+".",
+		"monad-status is not installed, so the node's RPC at "+r.p.RPCLocal+" is compared",
+		"with the public RPCs of the network. Make both reachable, or install",
+		"monad-status, then re-run.")
+}
+
+// rpcSyncConfig picks the chain and the public RPCs for the node's network.
+// The network comes from the run when phase 2 has read it, else from
+// node.toml directly: the sync check runs before phase 2.
+func rpcSyncConfig(p paths.Paths, network string) (rpcsync.Config, error) {
+	if network == "" {
+		network = nodeconf.TomlGet(p.NodeToml, "network_name")
+	}
+	chain := rpcsync.ChainID(network)
+	if chain == 0 {
+		return rpcsync.Config{}, ui.Die("Sync could not be verified: network_name in node.toml is not mainnet or testnet.",
+			"monad-status is not installed, so the node's RPC is compared with the",
+			"public RPCs of its network, which needs a known network_name.")
+	}
+	refs := p.RPCRefsTestnet
+	if network == "mainnet" {
+		refs = p.RPCRefsMainnet
+	}
+	return rpcsync.Config{Local: p.RPCLocal, References: refs, ChainID: chain, Interval: p.RPCInterval}, nil
 }
 
 func (r *Run) detectNetwork() error {

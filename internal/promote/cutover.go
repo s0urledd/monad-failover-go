@@ -13,6 +13,7 @@ import (
 	"github.com/s0urledd/monad-failover-go/internal/nodeconf"
 	"github.com/s0urledd/monad-failover-go/internal/place"
 	"github.com/s0urledd/monad-failover-go/internal/rpcports"
+	"github.com/s0urledd/monad-failover-go/internal/rpcsync"
 	"github.com/s0urledd/monad-failover-go/internal/systemd"
 	"github.com/s0urledd/monad-failover-go/internal/ui"
 	"github.com/s0urledd/monad-failover-go/internal/uptime"
@@ -482,10 +483,19 @@ func (r *Run) postVerify() error {
 	// in, and if it still has not caught up, say so rather than declaring
 	// success.
 	r.verifyPending = false
-	if !monad.Have("monad-status") {
-		r.verifyPending = true
-		r.c.Warn("monad-status not installed — sync could not be confirmed.")
-		return nil
+	haveStatus := monad.Have("monad-status")
+	var rpcCfg rpcsync.Config
+	if !haveStatus {
+		// After cutover the node's RPC answers only once state sync is done,
+		// so an unverified reading inside the window is retried like a
+		// not-yet-synced status.
+		cfg, err := rpcSyncConfig(r.p, r.network)
+		if err != nil {
+			r.verifyPending = true
+			r.c.Warn("Sync could not be confirmed: " + err.Error())
+			return nil
+		}
+		rpcCfg = cfg
 	}
 	limit := r.p.SyncWait
 	deadline := time.Now().Add(limit)
@@ -498,10 +508,19 @@ func (r *Run) postVerify() error {
 		if timeout <= 0 {
 			break
 		}
-		status, _, _ = monad.StatusWithin(timeout)
-		if status == "in-sync" {
-			r.c.OK("Node is in-sync")
-			return nil
+		if haveStatus {
+			status, _, _ = monad.StatusWithin(timeout)
+			if status == "in-sync" {
+				r.c.OK("Node is in-sync")
+				return nil
+			}
+		} else {
+			res := rpcsync.Verify(rpcCfg)
+			if res.Verdict == rpcsync.InSync {
+				r.c.OK("Node is in-sync via RPC (" + res.Detail + ")")
+				return nil
+			}
+			status = res.Detail
 		}
 		if limit <= 0 || !time.Now().Before(deadline) {
 			break
@@ -518,7 +537,11 @@ func (r *Run) postVerify() error {
 	if status == "" {
 		status = "no status"
 	}
-	r.c.Warn(fmt.Sprintf("Node reports %s after %ds — not in-sync yet.", status, int(limit/time.Second)))
+	if haveStatus {
+		r.c.Warn(fmt.Sprintf("Node reports %s after %ds — not in-sync yet.", status, int(limit/time.Second)))
+	} else {
+		r.c.Warn(fmt.Sprintf("Sync not confirmed via RPC after %ds: %s.", int(limit/time.Second), status))
+	}
 	return nil
 }
 

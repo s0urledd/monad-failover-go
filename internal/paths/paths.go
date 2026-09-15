@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/s0urledd/monad-failover-go/internal/netinfo"
@@ -42,6 +43,13 @@ type Paths struct {
 	HealthWait time.Duration
 	SyncWait   time.Duration
 
+	// Sync check over RPC, used when monad-status is not installed: this
+	// node's endpoint and the public endpoints of each network.
+	RPCLocal       string
+	RPCRefsMainnet []string
+	RPCRefsTestnet []string
+	RPCInterval    time.Duration // between the two head readings
+
 	// Overrides lists the operator environment variables that changed a
 	// default, as KEY=value, so a run says so before acting on them.
 	Overrides []string
@@ -51,6 +59,14 @@ const (
 	DefaultFoundationBase = "https://bucket.monadinfra.com/validator-data"
 	DefaultUptimeMainnet  = "https://validator-api.huginn.tech/monad-api/validator/uptime"
 	DefaultUptimeTestnet  = "https://validator-api-testnet.huginn.tech/monad-api/validator/uptime"
+	DefaultRPCLocal       = "http://127.0.0.1:8080"
+)
+
+// Public RPCs of each network, run by the Foundation. Two per network so
+// one being down does not leave the sync check without a comparison.
+var (
+	DefaultRPCRefsMainnet = []string{"https://rpc.monad.xyz", "https://rpc-mainnet.monadinfra.com"}
+	DefaultRPCRefsTestnet = []string{"https://testnet-rpc.monad.xyz", "https://rpc-testnet.monadinfra.com"}
 )
 
 func envOr(key, def string) string {
@@ -104,9 +120,11 @@ func FromEnv() (Paths, error) {
 	// signs, so a live (root) run refuses them rather than silently ignoring
 	// them: a stray variable must never be assumed honoured.
 	testOnly := map[string]string{
-		"MF_STATE_DIR":       os.Getenv("MF_STATE_DIR"),
-		"MF_IP_URL":          os.Getenv("MF_IP_URL"),
-		"MF_UPTIME_API_BASE": os.Getenv("MF_UPTIME_API_BASE"),
+		"MF_STATE_DIR":          os.Getenv("MF_STATE_DIR"),
+		"MF_IP_URL":             os.Getenv("MF_IP_URL"),
+		"MF_UPTIME_API_BASE":    os.Getenv("MF_UPTIME_API_BASE"),
+		"MF_RPC_LOCAL_URL":      os.Getenv("MF_RPC_LOCAL_URL"),
+		"MF_RPC_REFERENCE_URLS": os.Getenv("MF_RPC_REFERENCE_URLS"),
 	}
 	if !p.Sandbox {
 		for k, v := range testOnly {
@@ -132,5 +150,15 @@ func FromEnv() (Paths, error) {
 	if v := testOnly["MF_UPTIME_API_BASE"]; v != "" {
 		p.UptimeMainnet, p.UptimeTestnet = v, v
 	}
+	p.RPCLocal = DefaultRPCLocal
+	if v := testOnly["MF_RPC_LOCAL_URL"]; v != "" {
+		p.RPCLocal = v
+	}
+	p.RPCRefsMainnet, p.RPCRefsTestnet = DefaultRPCRefsMainnet, DefaultRPCRefsTestnet
+	if v := testOnly["MF_RPC_REFERENCE_URLS"]; v != "" {
+		refs := strings.Split(v, ",")
+		p.RPCRefsMainnet, p.RPCRefsTestnet = refs, refs
+	}
+	p.RPCInterval = 3 * time.Second
 	return p, nil
 }

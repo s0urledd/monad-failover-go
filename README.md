@@ -10,7 +10,7 @@ Use it for a planned migration or recovery when the old server is unavailable.
 It runs on the target full node using your validator key backups, with no
 connection to the old server required.
 
-0.2.2 is under validation on testnet. Do not use it on a mainnet validator
+0.3.0 is under validation on testnet. Do not use it on a mainnet validator
 before 1.0.
 
 ## How it works
@@ -34,7 +34,9 @@ before 1.0.
 ## What you need
 
 - A synced full node with the standard Monad setup and `KEYSTORE_PASSWORD`
-  set in `/home/monad/.env`.
+  set in `/home/monad/.env`. Sync is read from `monad-status`; without it,
+  the node's RPC on port 8080 is compared with the Foundation's public RPCs
+  of the network, which must both be reachable.
 - Your validator's `secp-backup` and `bls-backup`: the text backups containing
   the secret IKM, not the encrypted `id-secp` / `id-bls` keystores.
   Place them in a private directory of their own on the target (directory
@@ -55,8 +57,8 @@ On the target full node, as root. The checksum is verified before the
 binary is installed:
 
 ```bash
-curl -fsSLO https://github.com/s0urledd/monad-failover-go/releases/download/v0.2.2/monad-failover &&
-echo "4572daf38b6fd39d137e5869b93cafc447b6d2214c91576ba4c84c0d9c613fdb  monad-failover" | sha256sum -c - &&
+curl -fsSLO https://github.com/s0urledd/monad-failover-go/releases/download/v0.3.0/monad-failover &&
+echo "a90e05158da1a8b9917bcde20908c00455b4ac749e85d353ec65f5e516554dc8  monad-failover" | sha256sum -c - &&
 install -m 755 monad-failover /usr/local/bin/monad-failover
 ```
 
@@ -64,13 +66,13 @@ To build from source, install Go 1.24.7 or later and run:
 
 ```bash
 git clone https://github.com/s0urledd/monad-failover-go
-cd monad-failover-go && git checkout v0.2.2
+cd monad-failover-go && git checkout v0.3.0
 CGO_ENABLED=0 go build -o monad-failover ./cmd/monad-failover
 install -m 755 monad-failover /usr/local/bin/monad-failover
 ```
 
 The binary is static. It calls `systemctl`, `monad-keystore`,
-`monad-sign-name-record` and, for sync checks, `monad-status`.
+`monad-sign-name-record` and, when installed, `monad-status`.
 
 ## Run
 
