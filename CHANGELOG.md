@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.1 — 2026-09-15
+
+- Run logs go to `/var/lib/monad-failover/logs/`, not `/var/log`. On
+  Debian-family hosts with rsyslog, `/var/log` is group-writable
+  (`root:syslog`, mode 775) and the directory check refused it. Everything
+  the tool writes now sits under `/var/lib/monad-failover`, which is
+  root-only on every distribution, so a stock host needs no permission
+  change. The refusal message no longer suggests changing the mode of a
+  system directory.
+
 ## 0.4.0 — 2026-09-15
 
 The tool no longer writes under `/opt/monad`.

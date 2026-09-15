@@ -15,7 +15,7 @@ start services while the tool reports mismatched keys or config.
 - Backup export failed: preserve the validator backup files you supplied and
   the timestamped `.bak` copies. Fix the reported cause, then run `--resume`.
 
-Logs are in `/var/log/monad-failover/`. The current run's state is
+Logs are in `/var/lib/monad-failover/logs/`. The current run's state is
 `/var/lib/monad-failover/state`. Read it as text, never source it as shell code.
 
 ## Restoring this target to its previous full-node identity

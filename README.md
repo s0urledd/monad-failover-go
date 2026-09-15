@@ -10,7 +10,7 @@ Use it for a planned migration or recovery when the old server is unavailable.
 It runs on the target full node using your validator key backups, with no
 connection to the old server required.
 
-0.4.0 is under validation on testnet. Do not use it on a mainnet validator
+0.4.1 is under validation on testnet. Do not use it on a mainnet validator
 before 1.0.
 
 ## How it works
@@ -58,8 +58,8 @@ On the target full node, as root. The checksum is verified before the
 binary is installed:
 
 ```bash
-curl -fsSLO https://github.com/s0urledd/monad-failover-go/releases/download/v0.4.0/monad-failover &&
-echo "481fc0d690905e994ba9b8d992e0bffcd4faaf628b6f490a41acb4cd86ff6408  monad-failover" | sha256sum -c - &&
+curl -fsSLO https://github.com/s0urledd/monad-failover-go/releases/download/v0.4.1/monad-failover &&
+echo "b39615e6ac3902a859161632044e1b6929e55c678a5feae3c88a809b82d81551  monad-failover" | sha256sum -c - &&
 install -m 755 monad-failover /usr/local/bin/monad-failover
 ```
 
@@ -67,7 +67,7 @@ To build from source, install Go 1.24.7 or later and run:
 
 ```bash
 git clone https://github.com/s0urledd/monad-failover-go
-cd monad-failover-go && git checkout v0.4.0
+cd monad-failover-go && git checkout v0.4.1
 CGO_ENABLED=0 go build -o monad-failover ./cmd/monad-failover
 install -m 755 monad-failover /usr/local/bin/monad-failover
 ```
@@ -108,7 +108,7 @@ monad-failover --backup-dir /path/to/validator-backups \
 ## If a run is interrupted
 
 Run `monad-failover --resume`, including after a partial cutover. Do not start
-a fresh migration over an unfinished swap. Logs are in `/var/log/monad-failover/`.
+a fresh migration over an unfinished swap. Logs are in `/var/lib/monad-failover/logs/`.
 
 The saved `/var/lib/monad-failover/backup/failover-<timestamp>/` restores this server's
 original full-node identity. It does not move the validator back to the old

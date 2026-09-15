@@ -69,8 +69,8 @@ func walkPrivate(path string, create bool) (string, error) {
 		}
 		stickyAncestor := cur != abs && fi.Mode()&os.ModeSticky != 0 && st.Uid == 0
 		if fi.Mode().Perm()&0022 != 0 && !stickyAncestor {
-			return "", fmt.Errorf("%s is writable by other users (mode %o); another account could swap a directory under it. Fix: chmod g-w,o-w %s (its subdirectories are unaffected)",
-				cur, fi.Mode().Perm(), cur)
+			return "", fmt.Errorf("%s is writable by other users (mode %o); another account could swap a directory under it. Use a location whose parents are root-owned and not group- or world-writable, such as the default under /var/lib/monad-failover",
+				cur, fi.Mode().Perm())
 		}
 		if cur == abs && int(st.Uid) != os.Geteuid() {
 			return "", fmt.Errorf("%s must be owned by uid %d", cur, os.Geteuid())

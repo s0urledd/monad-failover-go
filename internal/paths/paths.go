@@ -61,7 +61,10 @@ const (
 	DefaultUptimeTestnet  = "https://validator-api-testnet.huginn.tech/monad-api/validator/uptime"
 	DefaultRPCLocal       = "http://127.0.0.1:8080"
 	DefaultBackupRoot     = "/var/lib/monad-failover/backup"
-	DefaultLogDir         = "/var/log/monad-failover"
+	// Not /var/log: on Debian-family hosts with rsyslog it is group-writable
+	// (root:syslog 775), which the directory check refuses. /var/lib is
+	// root-only everywhere.
+	DefaultLogDir = "/var/lib/monad-failover/logs"
 )
 
 // Public RPCs of each network, run by the Foundation. Two per network so

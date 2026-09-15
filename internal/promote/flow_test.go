@@ -68,7 +68,7 @@ func newHarness(t *testing.T) *harness {
 		BlsKey:           filepath.Join(home, "monad-bft", "config", "id-bls"),
 		PubkeyList:       filepath.Join(home, "pubkey-secp-bls"),
 		BackupRoot:       filepath.Join(root, "var", "lib", "monad-failover", "backup"),
-		LogDir:           filepath.Join(root, "var", "log", "monad-failover"),
+		LogDir:           filepath.Join(root, "var", "lib", "monad-failover", "logs"),
 		Sandbox:          true,
 		EUID:             os.Geteuid(),
 		HealthWait:       0,
@@ -1955,13 +1955,13 @@ func TestWritableAncestorIsFoundByTheDryRun(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("dry run exit %d:\n%s", code, out)
 	}
-	expect(t, out, "backups: "+optMonad+" is writable by other users (mode 775)", "Fix: chmod g-w,o-w "+optMonad,
+	expect(t, out, "backups: "+optMonad+" is writable by other users (mode 775)", "such as the default under /var/lib/monad-failover",
 		"Or point BACKUP_ROOT at a root-only directory.", "logs: "+optMonad+" is writable by other users", "Preflight failed")
 	code, out = h.normalRun()
 	if code != 1 {
 		t.Fatalf("live exit %d:\n%s", code, out)
 	}
-	expect(t, out, "Cannot use log directory", "chmod g-w,o-w "+optMonad, "Or point LOG_DIR at a root-only directory. Nothing has been changed.")
+	expect(t, out, "Cannot use log directory", optMonad+" is writable by other users (mode 775)", "Or point LOG_DIR at a root-only directory. Nothing has been changed.")
 	h.assertServicesUntouched()
 	if h.stateExists() {
 		t.Error("state written")

@@ -21,7 +21,7 @@ func TestPrivateDirRejectsLinksAndWritableParents(t *testing.T) {
 	os.Mkdir(loose, 0700)
 	os.Chmod(loose, 0777)
 	err := PrivateDir(filepath.Join(loose, "backup"))
-	if err == nil || !strings.Contains(err.Error(), "writable by other users (mode 777)") || !strings.Contains(err.Error(), "chmod g-w,o-w "+loose) {
+	if err == nil || !strings.Contains(err.Error(), loose+" is writable by other users (mode 777)") || !strings.Contains(err.Error(), "/var/lib/monad-failover") {
 		t.Fatalf("writable ancestor: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(loose, "backup")); err == nil {
